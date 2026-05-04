@@ -169,6 +169,8 @@ vps.example.com:22001
 
 如果日志出现 `application entrypoint is missing` 或旧版本中的 `application files are missing in /opt/rw-node`，优先检查 PaaS 是否把持久化卷挂载到了 `/opt/rw-node` 并覆盖了镜像内应用文件。PaaS FRP 镜像默认会从 `/opt/rw-node` 读取应用文件；不要把空卷挂载到这个路径，也不要把 `RW_NODE_DIR` 指向不包含 `dist/`、`node_modules/` 的目录。
 
+PaaS FRP 入口脚本会在启动 frpc 前等待 `NODE_PORT` 接受 HTTPS 连接。这个检查只要求 TCP/TLS 可连接，不要求 `/` 返回 2xx，因为 rw-node 根路径可能返回非 2xx 状态码。
+
 #### 新增节点流程
 
 1. 在 PaaS 新建一个 `latest-paas-frp` 实例。

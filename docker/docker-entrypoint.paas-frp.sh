@@ -67,7 +67,7 @@ wait_for_rw_node() {
     local i
 
     for i in $(seq 1 30); do
-        if curl -fsk "https://127.0.0.1:${NODE_PORT}/" >/dev/null 2>&1; then
+        if curl -ks --connect-timeout 2 --max-time 3 "https://127.0.0.1:${NODE_PORT}/" >/dev/null 2>&1; then
             return 0
         fi
 
@@ -201,7 +201,7 @@ if [[ "${FRP_ENABLED}" == "true" ]]; then
     generate_frpc_config
 
     if ! wait_for_rw_node; then
-        echo "[PaaS FRP] ERROR: rw-node did not become ready on https://127.0.0.1:${NODE_PORT}/"
+        echo "[PaaS FRP] ERROR: rw-node did not accept HTTPS connections on 127.0.0.1:${NODE_PORT}"
         terminate
         exit 1
     fi
