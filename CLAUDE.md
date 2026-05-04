@@ -53,6 +53,7 @@ PaaS FRP 版额外变量：
 - `FRP_REMOTE_PORT` — VPS 对外暴露的节点 TCP 端口（必填，需在 frps `allowPorts` 范围内）
 - `FRP_ENABLED` — 是否启动 frpc（默认 `true`）
 - `PORT` — 某些 PaaS 强制要求的 HTTP 健康检查端口；PaaS FRP 入口脚本会在该端口启动辅助 HTTP health server，不参与节点流量
+- `RW_NODE_APP_DIR` — PaaS FRP 镜像内应用文件目录（默认 `/opt/rw-node`，通常不要修改）
 
 ## 注意事项
 
@@ -62,4 +63,5 @@ PaaS FRP 版额外变量：
 - PaaS FRP 版必须保持 raw TCP 转发：Remnawave Panel → VPS `FRP_REMOTE_PORT` → frps → PaaS frpc → `127.0.0.1:NODE_PORT`，中间不能做 HTTPS 反代、TLS 终止、CDN HTTP 代理或证书替换，否则节点自签证书验证会失败
 - `XTLS_API_PORT` 是内部端口，不应通过 Docker、frp、VPS 防火墙或 PaaS 入站公开
 - VPS 侧 frps 只需一次性配置 `bindPort`、`auth.token` 和 `allowPorts` 端口池；新增节点时只需分配新的 `FRP_REMOTE_PORT`，`FRP_PROXY_NAME` 可手动指定或由容器自动生成，不要为每个节点修改 frps 服务端配置
+- 不要把 PaaS 持久化卷挂载到 `/opt/rw-node` 或把 `RW_NODE_DIR` 指向空目录，否则会覆盖/绕开镜像内 `dist/` 和 `node_modules/`，导致入口脚本报 `application entrypoint is missing`
 - 上游版本更新由 Renovate 自动提 PR，合并后自动触发完整构建和发布流程

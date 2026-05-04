@@ -142,6 +142,7 @@ ghcr.io/x-dora/rw-node:latest-paas-frp
 | `FRP_PROXY_NAME_PREFIX` | `rw-node` | 自动生成 `FRP_PROXY_NAME` 时使用的前缀 |
 | `FRP_ENABLED` | `true` | 设置为 `false` 可临时禁用 frpc |
 | `PORT` | - | 部分 PaaS 强制要求监听的 HTTP 健康检查端口 |
+| `RW_NODE_APP_DIR` | `/opt/rw-node` | PaaS FRP 镜像内应用文件目录，通常不要修改 |
 
 PaaS 示例：
 
@@ -165,6 +166,8 @@ vps.example.com:22001
 ```
 
 不要填写 PaaS 分配的 HTTP/HTTPS 域名，也不要经过 CDN/HTTPS 反向代理。
+
+如果日志出现 `application entrypoint is missing` 或旧版本中的 `application files are missing in /opt/rw-node`，优先检查 PaaS 是否把持久化卷挂载到了 `/opt/rw-node` 并覆盖了镜像内应用文件。PaaS FRP 镜像默认会从 `/opt/rw-node` 读取应用文件；不要把空卷挂载到这个路径，也不要把 `RW_NODE_DIR` 指向不包含 `dist/`、`node_modules/` 的目录。
 
 #### 新增节点流程
 

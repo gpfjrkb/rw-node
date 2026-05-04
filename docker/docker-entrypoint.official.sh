@@ -48,8 +48,9 @@ if [[ -z "${SECRET_KEY:-}" ]]; then
     exit 1
 fi
 
-if [[ ! -f "${WORK_DIR}/dist/src/main" ]]; then
-    echo "[Entrypoint] ERROR: application files are missing in ${WORK_DIR}"
+if [[ ! -f "${WORK_DIR}/dist/src/main" && ! -f "${WORK_DIR}/dist/src/main.js" ]]; then
+    echo "[Entrypoint] ERROR: application entrypoint is missing in ${WORK_DIR}"
+    find "${WORK_DIR}/dist" -maxdepth 3 -type f 2>/dev/null | sort | head -50 || true
     exit 1
 fi
 

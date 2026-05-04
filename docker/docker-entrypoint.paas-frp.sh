@@ -2,7 +2,15 @@
 
 set -euo pipefail
 
-WORK_DIR="${RW_NODE_DIR:-/opt/rw-node}"
+APP_DIR="${RW_NODE_APP_DIR:-/opt/rw-node}"
+WORK_DIR="${RW_NODE_DIR:-${APP_DIR}}"
+
+if [[ ! -f "${WORK_DIR}/dist/src/main" && ! -f "${WORK_DIR}/dist/src/main.js" && -f "${APP_DIR}/dist/src/main.js" ]]; then
+    echo "[PaaS FRP] RW_NODE_DIR=${WORK_DIR} does not contain application files; using RW_NODE_APP_DIR=${APP_DIR}"
+    WORK_DIR="${APP_DIR}"
+    export RW_NODE_DIR="${WORK_DIR}"
+fi
+
 CONF_DIR="${WORK_DIR}/conf"
 FRP_CONF_DIR="${CONF_DIR}/frp"
 FRPC_BIN="/usr/local/bin/frpc"
