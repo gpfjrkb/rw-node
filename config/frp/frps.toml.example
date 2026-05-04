@@ -1,0 +1,6 @@
+bindPort = 7000
+auth.token = "REPLACE_WITH_STRONG_RANDOM_TOKEN"
+
+allowPorts = [
+  { start = 22000, end = 22999 }
+]

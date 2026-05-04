@@ -32,6 +32,10 @@ jobs:
             dockerfile: docker/Dockerfile.official
             suffix: "-official"
             description: "Official Compatible (Python Supervisord)"
+          - variant: paas-frp
+            dockerfile: docker/Dockerfile.paas-frp
+            suffix: "-paas-frp"
+            description: "PaaS FRP TCP Tunnel"
     
     steps:
       - name: Checkout
@@ -91,3 +95,5 @@ jobs:
           echo "| \`ghcr.io/${{ github.repository }}:latest\` | Lightweight (Go Supervisord) |" >> $GITHUB_STEP_SUMMARY
           echo "| \`ghcr.io/${{ github.repository }}:${{ inputs.version }}-official\` | Official Compatible (Python Supervisord) |" >> $GITHUB_STEP_SUMMARY
           echo "| \`ghcr.io/${{ github.repository }}:latest-official\` | Official Compatible (Python Supervisord) |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`ghcr.io/${{ github.repository }}:${{ inputs.version }}-paas-frp\` | PaaS FRP TCP Tunnel |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`ghcr.io/${{ github.repository }}:latest-paas-frp\` | PaaS FRP TCP Tunnel |" >> $GITHUB_STEP_SUMMARY

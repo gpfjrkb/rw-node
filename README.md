@@ -20,6 +20,7 @@ Remnawave Node 轻量化部署方案，**无需 Python**。
 |------|------|------|
 | `ghcr.io/x-dora/rw-node:latest` | 轻量版 (Go Supervisord, 无 Python) | **~380MB** |
 | `ghcr.io/x-dora/rw-node:latest-official` | 官方兼容版 (Python Supervisord) | ~450MB |
+| `ghcr.io/x-dora/rw-node:latest-paas-frp` | PaaS 反向 TCP 隧道版 (内置 frpc) | ~400MB |
 
 ```bash
 # 轻量版（推荐）
@@ -58,6 +59,122 @@ services:
     ports:
       - "2222:2222"
 ```
+
+### 方式一补充：PaaS + FRP 反向 TCP 隧道
+
+当 PaaS 只提供 HTTP/HTTPS 入站端口，无法直接公开 `NODE_PORT` 的原始 TCP 连接时，可以使用 `latest-paas-frp` 镜像。该镜像会让容器主动连接到你的 VPS 上的 `frps`，由 VPS 对外提供节点 TCP 入口。
+
+连接链路：
+
+```text
+Remnawave Panel -> VPS:FRP_REMOTE_PORT -> frps -> PaaS frpc -> 127.0.0.1:NODE_PORT -> rw-node HTTPS
+```
+
+这条链路只做 TCP 转发，不做 HTTPS 反代或 TLS 终止，因此控制台仍会看到 rw-node 自己的自签证书。
+
+#### VPS 侧一次性配置 frps
+
+推荐直接使用仓库中的安装脚本：
+
+```bash
+sudo bash scripts/install-frps.sh \
+  --token REPLACE_WITH_STRONG_RANDOM_TOKEN \
+  --bind-port 7000 \
+  --allow-port-start 22000 \
+  --allow-port-end 22999
+```
+
+也可以手动下载 frp 并安装 `frps`，然后创建 `/etc/frp/frps.toml`：
+
+```toml
+bindPort = 7000
+auth.token = "REPLACE_WITH_STRONG_RANDOM_TOKEN"
+
+allowPorts = [
+  { start = 22000, end = 22999 }
+]
+```
+
+仓库也提供了示例文件：`config/frp/frps.toml.example` 和 `config/systemd/frps.service`。
+
+启动服务：
+
+```bash
+sudo mkdir -p /etc/frp
+sudo cp config/frp/frps.toml.example /etc/frp/frps.toml
+sudo cp config/systemd/frps.service /etc/systemd/system/frps.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now frps
+```
+
+防火墙需要放行：
+
+- `7000/tcp`：PaaS 容器连接 `frps` 的控制端口
+- `22000-22999/tcp`：节点公网入口端口池
+
+新增 PaaS 节点时不需要再修改 VPS 的 `frps.toml`，只需要从端口池中分配一个未使用端口。
+
+#### PaaS 侧环境变量
+
+使用镜像：
+
+```text
+ghcr.io/x-dora/rw-node:latest-paas-frp
+```
+
+必填环境变量：
+
+| 变量名 | 描述 | 示例 |
+|--------|------|------|
+| `SECRET_KEY` | Remnawave Panel 中的节点密钥 | `YOUR_SECRET_KEY` |
+| `FRP_SERVER_ADDR` | VPS IP 或域名 | `vps.example.com` |
+| `FRP_TOKEN` | 与 `frps.toml` 一致的 token | `REPLACE_WITH_STRONG_RANDOM_TOKEN` |
+| `FRP_REMOTE_PORT` | 该节点在 VPS 上占用的公网端口 | `22001` |
+
+常用可选环境变量：
+
+| 变量名 | 默认值 | 描述 |
+|--------|--------|------|
+| `NODE_PORT` | `2222` | rw-node 容器内 HTTPS 监听端口 |
+| `XTLS_API_PORT` | `61000` | Xray API 内部端口，不要公开 |
+| `FRP_SERVER_PORT` | `7000` | frps 控制端口 |
+| `FRP_PROXY_NAME` | `rw-node-<随机字符>` | frp 代理唯一名称 |
+| `FRP_PROXY_NAME_PREFIX` | `rw-node` | 自动生成 `FRP_PROXY_NAME` 时使用的前缀 |
+| `FRP_ENABLED` | `true` | 设置为 `false` 可临时禁用 frpc |
+| `PORT` | - | 部分 PaaS 强制要求监听的 HTTP 健康检查端口 |
+
+PaaS 示例：
+
+```bash
+docker run -d \
+  --name rw-node-paas \
+  -e SECRET_KEY=YOUR_SECRET_KEY \
+  -e NODE_PORT=2222 \
+  -e XTLS_API_PORT=61000 \
+  -e FRP_SERVER_ADDR=vps.example.com \
+  -e FRP_SERVER_PORT=7000 \
+  -e FRP_TOKEN=REPLACE_WITH_STRONG_RANDOM_TOKEN \
+  -e FRP_REMOTE_PORT=22001 \
+  ghcr.io/x-dora/rw-node:latest-paas-frp
+```
+
+Remnawave Panel 中节点地址填写 VPS 地址和 `FRP_REMOTE_PORT`，例如：
+
+```text
+vps.example.com:22001
+```
+
+不要填写 PaaS 分配的 HTTP/HTTPS 域名，也不要经过 CDN/HTTPS 反向代理。
+
+#### 新增节点流程
+
+1. 在 PaaS 新建一个 `latest-paas-frp` 实例。
+2. 从 `22000-22999` 中挑一个未使用端口，例如 `22002`，设置为 `FRP_REMOTE_PORT`。
+3. 设置该节点对应的 `SECRET_KEY`。
+4. 可选：设置易读的 `FRP_PROXY_NAME`，例如 `rw-node-02`；不设置时容器会自动生成 `rw-node-<随机字符>`。
+5. 在 Remnawave Panel 中填写 `<VPS_IP_OR_DOMAIN>:<FRP_REMOTE_PORT>`。
+
+建议维护一个简单端口表，例如 `22001 = rw-node-hk-01`、`22002 = rw-node-us-01`，避免多个节点使用同一个端口。
 
 ### 方式二：一键脚本安装
 
@@ -135,6 +252,12 @@ bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/
 | `SECRET_KEY` | 面板密钥 | - |
 | `XTLS_API_PORT` | Xray API 端口 | `61000` |
 | `RW_NODE_DIR` | 工作目录（所有文件存放位置） | `/opt/rw-node` |
+| `FRP_SERVER_ADDR` | PaaS FRP 版使用的 frps 地址 | - |
+| `FRP_SERVER_PORT` | PaaS FRP 版使用的 frps 端口 | `7000` |
+| `FRP_TOKEN` | PaaS FRP 版使用的 frps token | - |
+| `FRP_PROXY_NAME` | PaaS FRP 版代理名称，不填则自动生成 | `rw-node-<随机字符>` |
+| `FRP_PROXY_NAME_PREFIX` | PaaS FRP 版自动代理名前缀 | `rw-node` |
+| `FRP_REMOTE_PORT` | PaaS FRP 版 VPS 公网节点端口 | - |
 
 ### 自定义工作目录
 
