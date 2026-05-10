@@ -19,16 +19,21 @@ NC='\033[0m'
 INSTALL_DIR="${RW_NODE_DIR:-/opt/rw-node}"
 GITHUB_REPO="x-dora/rw-node"
 UPSTREAM_REPO="remnawave/node"
-DEFAULT_XRAY_VERSION="v25.12.8"
+GO_IMPL_REPO="x-dora/rw-node-go"
+DEFAULT_XRAY_VERSION="v26.3.27"
 DEFAULT_NODE_VERSION="22"
 
+INSTALL_IMPL="official"
 WITH_CLOUDFLARED=false
 CLOUDFLARED_TOKEN=""
 INSTALL_VERSION=""
+GO_VERSION=""
 RESOLVED_VERSION=""
+CONFIG_REF=""
 NODE_PORT="2222"
 SECRET_KEY=""
 XTLS_API_PORT="61000"
+INTERNAL_REST_PORT="61001"
 
 IS_CONTAINER=false
 HAS_SYSTEMD=false
@@ -183,10 +188,10 @@ check_dependencies() {
     if ! command -v curl >/dev/null 2>&1; then
         missing+=("curl")
     fi
-    if ! command -v git >/dev/null 2>&1; then
+    if [[ "$INSTALL_IMPL" != "go" ]] && ! command -v git >/dev/null 2>&1; then
         missing+=("git")
     fi
-    if ! command -v unzip >/dev/null 2>&1; then
+    if [[ "$INSTALL_IMPL" != "go" ]] && ! command -v unzip >/dev/null 2>&1; then
         missing+=("unzip")
     fi
     if ! command -v jq >/dev/null 2>&1; then
@@ -199,7 +204,7 @@ check_dependencies() {
             apk) missing+=("procps") ;;
         esac
     fi
-    if ! xz --version >/dev/null 2>&1; then
+    if [[ "$INSTALL_IMPL" != "go" ]] && ! xz --version >/dev/null 2>&1; then
         case "$PKG_MANAGER" in
             apt) missing+=("xz-utils") ;;
             yum|dnf) missing+=("xz") ;;
@@ -264,7 +269,28 @@ clean_rw_node_artifacts() {
         "${INSTALL_DIR}/libs" \
         "${INSTALL_DIR}/node_modules" \
         "${INSTALL_DIR}/package.json" \
-        "${INSTALL_DIR}/package-lock.json"
+        "${INSTALL_DIR}/package-lock.json" \
+        "${INSTALL_DIR}/.rw-node-impl" \
+        "${INSTALL_DIR}/.rw-node-go-version"
+}
+
+clean_go_artifacts() {
+    rm -f "${INSTALL_DIR}/bin/rw-node-go" "${INSTALL_DIR}/.rw-node-go-version"
+}
+
+clean_official_runtime_artifacts() {
+    rm -rf "${INSTALL_DIR}/node"
+    rm -f "${INSTALL_DIR}/bin/supervisord" "${INSTALL_DIR}/bin/xray" "${INSTALL_DIR}/bin/rw-core"
+}
+
+detect_go_asset_name() {
+    local arch="$1"
+
+    case "$arch" in
+        amd64) echo "rw-node-go-linux-64.tar.gz" ;;
+        arm64) echo "rw-node-go-linux-arm64-v8a.tar.gz" ;;
+        *) print_error "不支持的架构: $arch"; exit 1 ;;
+    esac
 }
 
 install_nodejs() {
@@ -451,6 +477,67 @@ install_rw_node() {
     fi
 }
 
+get_latest_go_version() {
+    local version
+    version=$(get_latest_release_tag "${GO_IMPL_REPO}" || true)
+
+    if [[ -z "$version" ]]; then
+        print_error "无法获取 rw-node-go 最新版本"
+        exit 1
+    fi
+
+    echo "$version"
+}
+
+install_rw_node_go() {
+    local arch version asset_name url tmp_dir archive stage_dir
+
+    print_step "安装 RW-Node Go 实现..."
+
+    arch=$(detect_arch)
+    version="${GO_VERSION:-$(get_latest_go_version)}"
+    asset_name="$(detect_go_asset_name "$arch")"
+    url="https://github.com/${GO_IMPL_REPO}/releases/download/${version}/${asset_name}"
+    tmp_dir="/tmp/rw-node-go-install-release"
+    archive="${tmp_dir}/${asset_name}"
+    stage_dir="${tmp_dir}/stage"
+
+    RESOLVED_VERSION="$version"
+    CONFIG_REF="main"
+
+    print_info "安装实现: go"
+    print_info "Go 实现版本: $version"
+    print_info "下载: $url"
+
+    mkdir -p "${INSTALL_DIR}/bin" "${INSTALL_DIR}/share/xray" "${INSTALL_DIR}/logs" "${INSTALL_DIR}/run" "${INSTALL_DIR}/conf" "${tmp_dir}"
+    rm -rf "${tmp_dir:?}/"*
+
+    curl -fsSL "$url" -o "$archive"
+    mkdir -p "$stage_dir"
+    tar -xzf "$archive" -C "$stage_dir"
+
+    if [[ ! -x "${stage_dir}/rw-node-go" ]]; then
+        print_error "rw-node-go 发布包缺少可执行文件: rw-node-go"
+        exit 1
+    fi
+    if [[ ! -f "${stage_dir}/geoip.dat" || ! -f "${stage_dir}/geosite.dat" ]]; then
+        print_error "rw-node-go 发布包缺少 geoip.dat / geosite.dat"
+        exit 1
+    fi
+
+    clean_rw_node_artifacts
+    clean_go_artifacts
+    clean_official_runtime_artifacts
+    install -m 755 "${stage_dir}/rw-node-go" "${INSTALL_DIR}/bin/rw-node-go"
+    install -m 644 "${stage_dir}/geoip.dat" "${INSTALL_DIR}/share/xray/geoip.dat"
+    install -m 644 "${stage_dir}/geosite.dat" "${INSTALL_DIR}/share/xray/geosite.dat"
+    printf 'go\n' > "${INSTALL_DIR}/.rw-node-impl"
+    printf '%s\n' "$version" > "${INSTALL_DIR}/.rw-node-go-version"
+
+    rm -rf "$tmp_dir"
+    print_success "RW-Node Go 实现安装完成"
+}
+
 extract_cloudflared_token() {
     if [[ -f /etc/systemd/system/cloudflared.service ]]; then
         sed -n 's/.*--token \([^[:space:]]*\).*/\1/p' /etc/systemd/system/cloudflared.service | head -1
@@ -515,11 +602,30 @@ configure_env() {
         read -r -p "请输入节点端口 [默认: 2222]: " input_port
         NODE_PORT="${input_port:-2222}"
 
-        read -r -p "请输入 Xray API 端口 [默认: 61000]: " input_api_port
-        XTLS_API_PORT="${input_api_port:-61000}"
+        if [[ "$INSTALL_IMPL" == "go" ]]; then
+            read -r -p "请输入 Internal REST 端口 [默认: 61001]: " input_internal_port
+            INTERNAL_REST_PORT="${input_internal_port:-61001}"
+        else
+            read -r -p "请输入 Xray API 端口 [默认: 61000]: " input_api_port
+            XTLS_API_PORT="${input_api_port:-61000}"
+        fi
     fi
 
-    cat > "${INSTALL_DIR}/.env" << EOF
+    if [[ "$INSTALL_IMPL" == "go" ]]; then
+        cat > "${INSTALL_DIR}/.env" << EOF
+### VITALS ###
+NODE_PORT=${NODE_PORT}
+SECRET_KEY=${SECRET_KEY}
+
+### Internal (local) ports ###
+INTERNAL_REST_PORT=${INTERNAL_REST_PORT}
+
+### Runtime ###
+REQUIRE_SECRET_KEY=true
+XRAY_LOCATION_ASSET=${INSTALL_DIR}/share/xray
+EOF
+    else
+        cat > "${INSTALL_DIR}/.env" << EOF
 ### VITALS ###
 NODE_PORT=${NODE_PORT}
 SECRET_KEY=${SECRET_KEY}
@@ -527,6 +633,7 @@ SECRET_KEY=${SECRET_KEY}
 ### Internal (local) ports ###
 XTLS_API_PORT=${XTLS_API_PORT}
 EOF
+    fi
 
     chmod 600 "${INSTALL_DIR}/.env"
     print_success "环境变量配置完成"
@@ -568,6 +675,10 @@ create_helper_scripts() {
 #!/bin/bash
 set -euo pipefail
 WORK_DIR="${RW_NODE_DIR:-/opt/rw-node}"
+if [[ "$(cat "${WORK_DIR}/.rw-node-impl" 2>/dev/null || echo official)" == "go" ]]; then
+    echo "Go 实现使用内嵌 xray-core，不写入 xray.out.log；请查看: journalctl -u rw-node -f"
+    exit 0
+fi
 tail -n +1 -f "${WORK_DIR}/logs/xray.out.log"
 EOF
     chmod +x "${bin_dir}/xlogs"
@@ -576,6 +687,10 @@ EOF
 #!/bin/bash
 set -euo pipefail
 WORK_DIR="${RW_NODE_DIR:-/opt/rw-node}"
+if [[ "$(cat "${WORK_DIR}/.rw-node-impl" 2>/dev/null || echo official)" == "go" ]]; then
+    echo "Go 实现使用内嵌 xray-core，不写入 xray.err.log；请查看: journalctl -u rw-node -f"
+    exit 0
+fi
 tail -n +1 -f "${WORK_DIR}/logs/xray.err.log"
 EOF
     chmod +x "${bin_dir}/xerrors"
@@ -586,6 +701,7 @@ set -euo pipefail
 
 INSTALL_DIR="${RW_NODE_DIR:-/opt/rw-node}"
 RUN_DIR="${INSTALL_DIR}/run"
+IMPL=$(cat "${INSTALL_DIR}/.rw-node-impl" 2>/dev/null || echo "official")
 
 read_pid_file() {
     local file="$1"
@@ -624,62 +740,89 @@ echo "          RW-Node 状态信息"
 echo "=========================================="
 echo ""
 
-if [[ -f "${INSTALL_DIR}/package.json" ]]; then
+echo "实现模式: ${IMPL}"
+
+if [[ "$IMPL" == "go" ]]; then
+    GO_VERSION=$(cat "${INSTALL_DIR}/.rw-node-go-version" 2>/dev/null || echo "未知")
+    echo "RW-Node Go 版本: ${GO_VERSION}"
+elif [[ -f "${INSTALL_DIR}/package.json" ]]; then
     VERSION=$(jq -r '.version // "未知"' "${INSTALL_DIR}/package.json" 2>/dev/null || echo "未知")
     echo "RW-Node 版本: ${VERSION}"
 else
     echo "RW-Node 版本: 未知"
 fi
 
-XRAY_BIN="${INSTALL_DIR}/bin/rw-core"
-XRAY_VER=$("${XRAY_BIN}" version 2>/dev/null | head -1 || echo "未安装")
-echo "Xray 版本: ${XRAY_VER}"
+if [[ "$IMPL" == "go" ]]; then
+    echo "运行时: Go 单进程内嵌 xray-core"
+else
+    XRAY_BIN="${INSTALL_DIR}/bin/rw-core"
+    XRAY_VER=$("${XRAY_BIN}" version 2>/dev/null | head -1 || echo "未安装")
+    echo "Xray 版本: ${XRAY_VER}"
 
-NODE_BIN="${INSTALL_DIR}/node/bin/node"
-NODE_VER=$("${NODE_BIN}" -v 2>/dev/null || echo "未知")
-echo "Node.js 版本: ${NODE_VER}"
+    NODE_BIN="${INSTALL_DIR}/node/bin/node"
+    NODE_VER=$("${NODE_BIN}" -v 2>/dev/null || echo "未知")
+    echo "Node.js 版本: ${NODE_VER}"
+fi
 echo ""
 
 echo "=== 服务状态 ==="
 NODE_PID=$(read_pid_file "${RUN_DIR}/rw-node.pid" || true)
-if [[ -n "${NODE_PID:-}" ]] && pid_matches_exe "${NODE_PID}" "${INSTALL_DIR}/node/bin/node"; then
-    echo "RW-Node 进程: ✅ 运行中"
+if [[ "$IMPL" == "go" ]]; then
+    if [[ -n "${NODE_PID:-}" ]] && pid_matches_exe "${NODE_PID}" "${INSTALL_DIR}/bin/rw-node-go"; then
+        echo "RW-Node Go 进程: ✅ 运行中"
+    else
+        FALLBACK_GO_PID=$(find_process_by_prefix "${INSTALL_DIR}/bin/rw-node-go" || true)
+        if [[ -n "${FALLBACK_GO_PID:-}" ]]; then
+            echo "RW-Node Go 进程: ✅ 运行中"
+        else
+            echo "RW-Node Go 进程: ❌ 未运行"
+        fi
+    fi
 else
-    FALLBACK_NODE_PID=$(find_process_by_prefix "${INSTALL_DIR}/node/bin/node dist/src/main" || true)
-    if [[ -n "${FALLBACK_NODE_PID:-}" ]]; then
+    if [[ -n "${NODE_PID:-}" ]] && pid_matches_exe "${NODE_PID}" "${INSTALL_DIR}/node/bin/node"; then
         echo "RW-Node 进程: ✅ 运行中"
     else
-        echo "RW-Node 进程: ❌ 未运行"
+        FALLBACK_NODE_PID=$(find_process_by_prefix "${INSTALL_DIR}/node/bin/node dist/src/main" || true)
+        if [[ -n "${FALLBACK_NODE_PID:-}" ]]; then
+            echo "RW-Node 进程: ✅ 运行中"
+        else
+            echo "RW-Node 进程: ❌ 未运行"
+        fi
     fi
-fi
 
-SUPERVISORD_PID_FILE=$(find "${RUN_DIR}" -maxdepth 1 -name 'supervisord-*.pid' | head -1 || true)
-SUPERVISORD_PID=$(read_pid_file "${SUPERVISORD_PID_FILE:-/dev/null}" || true)
-if [[ -n "${SUPERVISORD_PID:-}" ]] && pid_matches_exe "${SUPERVISORD_PID}" "${INSTALL_DIR}/bin/supervisord"; then
-    echo "Supervisord: ✅ 运行中"
-else
-    FALLBACK_SUPERVISORD_PID=$(find_process_by_prefix "${INSTALL_DIR}/bin/supervisord" || true)
-    if [[ -n "${FALLBACK_SUPERVISORD_PID:-}" ]]; then
+    SUPERVISORD_PID_FILE=$(find "${RUN_DIR}" -maxdepth 1 -name 'supervisord-*.pid' | head -1 || true)
+    SUPERVISORD_PID=$(read_pid_file "${SUPERVISORD_PID_FILE:-/dev/null}" || true)
+    if [[ -n "${SUPERVISORD_PID:-}" ]] && pid_matches_exe "${SUPERVISORD_PID}" "${INSTALL_DIR}/bin/supervisord"; then
         echo "Supervisord: ✅ 运行中"
     else
-        echo "Supervisord: ❌ 未运行"
+        FALLBACK_SUPERVISORD_PID=$(find_process_by_prefix "${INSTALL_DIR}/bin/supervisord" || true)
+        if [[ -n "${FALLBACK_SUPERVISORD_PID:-}" ]]; then
+            echo "Supervisord: ✅ 运行中"
+        else
+            echo "Supervisord: ❌ 未运行"
+        fi
     fi
-fi
 
-XRAY_PID=$(find_process_by_prefix "${INSTALL_DIR}/bin/rw-core" || true)
-if [[ -n "${XRAY_PID:-}" ]]; then
-    echo "Xray: ✅ 运行中"
-else
-    echo "Xray: ⏳ 待启动"
+    XRAY_PID=$(find_process_by_prefix "${INSTALL_DIR}/bin/rw-core" || true)
+    if [[ -n "${XRAY_PID:-}" ]]; then
+        echo "Xray: ✅ 运行中"
+    else
+        echo "Xray: ⏳ 待启动"
+    fi
 fi
 echo ""
 
 if [[ -f "${INSTALL_DIR}/.env" ]]; then
     echo "=== 配置信息 ==="
     NODE_PORT=$(grep -E "^NODE_PORT=" "${INSTALL_DIR}/.env" | cut -d'=' -f2)
-    XTLS_API_PORT=$(grep -E "^XTLS_API_PORT=" "${INSTALL_DIR}/.env" | cut -d'=' -f2)
     echo "节点端口: ${NODE_PORT:-2222}"
-    echo "API 端口: ${XTLS_API_PORT:-61000}"
+    if [[ "$IMPL" == "go" ]]; then
+        INTERNAL_REST_PORT=$(grep -E "^INTERNAL_REST_PORT=" "${INSTALL_DIR}/.env" | cut -d'=' -f2)
+        echo "Internal REST 端口: ${INTERNAL_REST_PORT:-61001}"
+    else
+        XTLS_API_PORT=$(grep -E "^XTLS_API_PORT=" "${INSTALL_DIR}/.env" | cut -d'=' -f2)
+        echo "API 端口: ${XTLS_API_PORT:-61000}"
+    fi
 fi
 echo ""
 echo "=========================================="
@@ -749,12 +892,14 @@ kill_processes_by_prefix() {
 
 echo "停止 RW-Node..."
 
+kill_pid_file "${RUN_DIR}/rw-node.pid" "${WORK_DIR}/bin/rw-node-go"
 kill_pid_file "${RUN_DIR}/rw-node.pid" "${WORK_DIR}/node/bin/node"
 
 while read -r pid_file; do
     kill_pid_file "$pid_file" "${WORK_DIR}/bin/supervisord"
 done < <(find "${RUN_DIR}" -maxdepth 1 -name 'supervisord-*.pid' -print)
 
+kill_processes_by_prefix "${WORK_DIR}/bin/rw-node-go"
 kill_processes_by_prefix "${WORK_DIR}/node/bin/node dist/src/main"
 kill_processes_by_prefix "${WORK_DIR}/bin/supervisord"
 kill_processes_by_prefix "${WORK_DIR}/bin/rw-core"
@@ -831,7 +976,11 @@ print_completion() {
 
     echo ""
     echo -e "${CYAN}日志查看:${NC}"
-    echo "  xlogs / xerrors"
+    if [[ "$INSTALL_IMPL" == "go" ]]; then
+        echo "  journalctl -u rw-node -f"
+    else
+        echo "  xlogs / xerrors"
+    fi
     echo ""
     echo -e "${CYAN}配置文件:${NC} ${INSTALL_DIR}/.env"
     echo ""
@@ -849,6 +998,14 @@ require_value() {
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --impl)
+                require_value "$1" "${2:-}"
+                case "$2" in
+                    official|go) INSTALL_IMPL="$2" ;;
+                    *) print_error "--impl 仅支持 official 或 go"; exit 1 ;;
+                esac
+                shift 2
+                ;;
             --with-cloudflared)
                 WITH_CLOUDFLARED=true
                 shift
@@ -864,9 +1021,19 @@ parse_args() {
                 INSTALL_VERSION="$2"
                 shift 2
                 ;;
+            --go-version)
+                require_value "$1" "${2:-}"
+                GO_VERSION="$2"
+                shift 2
+                ;;
             --port|-p)
                 require_value "$1" "${2:-}"
                 NODE_PORT="$2"
+                shift 2
+                ;;
+            --internal-rest-port)
+                require_value "$1" "${2:-}"
+                INTERNAL_REST_PORT="$2"
                 shift 2
                 ;;
             --xtls-api-port)
@@ -886,9 +1053,12 @@ parse_args() {
                 ;;
             --help|-h)
                 echo "用法: $0 [选项]"
+                echo "  --impl <official|go>         实现模式 (默认: official)"
                 echo "  --version, -v <版本>         指定版本"
+                echo "  --go-version <版本>          指定 rw-node-go 版本 (默认: 最新 release)"
                 echo "  --port, -p <端口>            节点端口 (默认: 2222)"
                 echo "  --xtls-api-port <端口>       Xray API 端口 (默认: 61000)"
+                echo "  --internal-rest-port <端口>  Go 模式 Internal REST 端口 (默认: 61001)"
                 echo "  --secret-key, -k <密钥>      面板密钥"
                 echo "  --with-cloudflared           安装 Cloudflare Tunnel"
                 echo "  --cloudflared-token <令牌>   Cloudflare Tunnel Token"
@@ -915,11 +1085,20 @@ main() {
     detect_container
     detect_os
     check_dependencies
-    install_nodejs
-    install_supervisord
-    install_xray
-    install_rw_node
-    download_configs "${RESOLVED_VERSION}"
+
+    if [[ "$INSTALL_IMPL" == "go" ]]; then
+        install_rw_node_go
+        download_configs "${CONFIG_REF:-main}"
+    else
+        install_nodejs
+        install_supervisord
+        install_xray
+        install_rw_node
+        clean_go_artifacts
+        printf 'official\n' > "${INSTALL_DIR}/.rw-node-impl"
+        download_configs "${RESOLVED_VERSION}"
+    fi
+
     configure_env
     install_cloudflared
     create_helper_scripts

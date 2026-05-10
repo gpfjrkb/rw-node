@@ -106,12 +106,14 @@ stop_services() {
         systemctl stop cloudflared 2>/dev/null || true
     fi
 
+    kill_pid_file "${INSTALL_DIR}/run/rw-node.pid" "${INSTALL_DIR}/bin/rw-node-go"
     kill_pid_file "${INSTALL_DIR}/run/rw-node.pid" "${INSTALL_DIR}/node/bin/node"
 
     while read -r pid_file; do
         kill_pid_file "$pid_file" "${INSTALL_DIR}/bin/supervisord"
     done < <(find "${INSTALL_DIR}/run" -maxdepth 1 -name 'supervisord-*.pid' -print 2>/dev/null || true)
 
+    kill_processes_by_prefix "${INSTALL_DIR}/bin/rw-node-go"
     kill_processes_by_prefix "${INSTALL_DIR}/node/bin/node dist/src/main"
     kill_processes_by_prefix "${INSTALL_DIR}/bin/supervisord"
     kill_processes_by_prefix "${INSTALL_DIR}/bin/rw-core"
@@ -166,6 +168,7 @@ remove_files() {
     remove_symlink_if_owned /usr/local/bin/rw-core
     remove_symlink_if_owned /usr/local/bin/supervisord
     remove_symlink_if_owned /usr/local/bin/cloudflared
+    remove_symlink_if_owned /usr/local/bin/rw-node-go
 
     rm -f /run/supervisord*.sock /run/remnawave-internal*.sock /var/run/supervisord*.pid /tmp/supervisord.conf 2>/dev/null || true
     rm -rf /var/log/supervisor 2>/dev/null || true

@@ -48,6 +48,13 @@ check_installation() {
     fi
 }
 
+check_update_supported() {
+    if [[ -f "${INSTALL_DIR}/.rw-node-impl" && "$(cat "${INSTALL_DIR}/.rw-node-impl" 2>/dev/null)" == "go" ]]; then
+        print_error "当前安装为 rw-node-go 模式；请重新运行 install.sh --impl go 进行覆盖安装"
+        exit 1
+    fi
+}
+
 detect_container() {
     if [[ -f /.dockerenv ]] || [[ -f /run/.containerenv ]] || grep -qE '(docker|lxc|kubepods|containerd)' /proc/1/cgroup 2>/dev/null; then
         IS_CONTAINER=true
@@ -151,6 +158,11 @@ check_dependencies() {
 }
 
 get_current_version() {
+    if [[ -f "${INSTALL_DIR}/.rw-node-impl" && "$(cat "${INSTALL_DIR}/.rw-node-impl" 2>/dev/null)" == "go" ]]; then
+        cat "${INSTALL_DIR}/.rw-node-go-version" 2>/dev/null || echo "unknown"
+        return 0
+    fi
+
     if [[ -f "${INSTALL_DIR}/package.json" ]]; then
         jq -r '.version // "unknown"' "${INSTALL_DIR}/package.json" 2>/dev/null || echo "unknown"
     else
@@ -229,12 +241,14 @@ stop_service() {
         systemctl stop rw-node 2>/dev/null || true
         systemctl stop cloudflared 2>/dev/null || true
     else
+        kill_pid_file "${INSTALL_DIR}/run/rw-node.pid" "${INSTALL_DIR}/bin/rw-node-go"
         kill_pid_file "${INSTALL_DIR}/run/rw-node.pid" "${INSTALL_DIR}/node/bin/node"
 
         while read -r pid_file; do
             kill_pid_file "$pid_file" "${INSTALL_DIR}/bin/supervisord"
         done < <(find "${INSTALL_DIR}/run" -maxdepth 1 -name 'supervisord-*.pid' -print 2>/dev/null || true)
 
+        kill_processes_by_prefix "${INSTALL_DIR}/bin/rw-node-go"
         kill_processes_by_prefix "${INSTALL_DIR}/node/bin/node dist/src/main"
         kill_processes_by_prefix "${INSTALL_DIR}/bin/supervisord"
         kill_processes_by_prefix "${INSTALL_DIR}/bin/rw-core"
@@ -527,6 +541,7 @@ main() {
     parse_args "$@"
     check_root
     check_installation
+    check_update_supported
     detect_container
     detect_os
     check_dependencies

@@ -87,6 +87,40 @@ wait_for_socket() {
 
 load_env_file
 
+IMPL=$(cat "${WORK_DIR}/.rw-node-impl" 2>/dev/null || echo "official")
+
+if [[ "$IMPL" == "go" ]]; then
+    if [[ -z "${SECRET_KEY:-}" ]]; then
+        echo "[Entrypoint] ERROR: SECRET_KEY is required"
+        exit 1
+    fi
+
+    if [[ ! -x "${BIN_DIR}/rw-node-go" ]]; then
+        echo "[Entrypoint] ERROR: rw-node-go binary not found"
+        exit 1
+    fi
+
+    export REQUIRE_SECRET_KEY="${REQUIRE_SECRET_KEY:-true}"
+    export NODE_PORT="${NODE_PORT:-2222}"
+    export INTERNAL_REST_PORT="${INTERNAL_REST_PORT:-61001}"
+    export XRAY_LOCATION_ASSET="${XRAY_LOCATION_ASSET:-${ASSET_DIR}}"
+    export RW_NODE_DIR="${WORK_DIR}"
+
+    if [[ ! -f "${XRAY_LOCATION_ASSET}/geoip.dat" || ! -f "${XRAY_LOCATION_ASSET}/geosite.dat" ]]; then
+        echo "[Entrypoint] WARNING: geoip.dat/geosite.dat missing in ${XRAY_LOCATION_ASSET}"
+    fi
+
+    echo "[Entrypoint] Starting rw-node-go..."
+    echo "[Entrypoint] Work directory: ${WORK_DIR}"
+    echo "[Entrypoint] NODE_PORT: ${NODE_PORT}"
+    echo "[Entrypoint] INTERNAL_REST_PORT: ${INTERNAL_REST_PORT}"
+    echo "[Entrypoint] XRAY_LOCATION_ASSET: ${XRAY_LOCATION_ASSET}"
+
+    cd "${WORK_DIR}"
+    echo "$$" > "${NODE_PID_PATH}"
+    exec "${BIN_DIR}/rw-node-go"
+fi
+
 SUPERVISORD_USER="${SUPERVISORD_USER:-$(generate_random 64)}"
 SUPERVISORD_PASSWORD="${SUPERVISORD_PASSWORD:-$(generate_random 64)}"
 INTERNAL_REST_TOKEN="${INTERNAL_REST_TOKEN:-$(generate_random 64)}"

@@ -1,0 +1,58 @@
+# Go implementation PaaS + FRP Dockerfile.
+# Downloads rw-node-go release assets and embeds frpc for outbound TCP tunneling.
+FROM alpine:3.23
+
+ARG RW_NODE_GO_REPO=x-dora/rw-node-go
+ARG RW_NODE_GO_VERSION=latest
+ARG FRP_VERSION=0.68.1
+ARG TARGETARCH
+
+LABEL org.opencontainers.image.source="https://github.com/x-dora/rw-node"
+LABEL org.opencontainers.image.description="Remnawave Node Go Implementation - PaaS FRP TCP Tunnel"
+LABEL org.opencontainers.image.licenses="AGPL-3.0"
+
+WORKDIR /opt/rw-node-go
+
+RUN set -ex; \
+    apk add --no-cache bash busybox-extras ca-certificates curl tar; \
+    if [ "${TARGETARCH}" = "arm64" ]; then \
+        GO_ASSET="rw-node-go-linux-arm64-v8a.tar.gz"; \
+        FRP_ARCH="arm64"; \
+    else \
+        GO_ASSET="rw-node-go-linux-64.tar.gz"; \
+        FRP_ARCH="amd64"; \
+    fi; \
+    if [ "${RW_NODE_GO_VERSION}" = "latest" ]; then \
+        RW_NODE_GO_VERSION="$(curl -fsSL "https://api.github.com/repos/${RW_NODE_GO_REPO}/releases/latest" | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"; \
+    fi; \
+    test -n "${RW_NODE_GO_VERSION}"; \
+    curl -fsSL "https://github.com/${RW_NODE_GO_REPO}/releases/download/${RW_NODE_GO_VERSION}/${GO_ASSET}" -o /tmp/rw-node-go.tar.gz; \
+    mkdir -p /tmp/rw-node-go /usr/local/share/xray; \
+    tar -xzf /tmp/rw-node-go.tar.gz -C /tmp/rw-node-go; \
+    install -m 755 /tmp/rw-node-go/rw-node-go /usr/local/bin/rw-node-go; \
+    install -m 644 /tmp/rw-node-go/geoip.dat /usr/local/share/xray/geoip.dat; \
+    install -m 644 /tmp/rw-node-go/geosite.dat /usr/local/share/xray/geosite.dat; \
+    printf '%s\n' "${RW_NODE_GO_VERSION}" > /opt/rw-node-go/.rw-node-go-version; \
+    curl -fsSL "https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/frp_${FRP_VERSION}_linux_${FRP_ARCH}.tar.gz" -o /tmp/frp.tar.gz; \
+    tar -xzf /tmp/frp.tar.gz -C /tmp; \
+    install -m 755 "/tmp/frp_${FRP_VERSION}_linux_${FRP_ARCH}/frpc" /usr/local/bin/frpc; \
+    rm -rf /tmp/* /var/cache/apk/*
+
+COPY docker-entrypoint.go-paas-frp.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-entrypoint.go-paas-frp.sh
+
+ENV REQUIRE_SECRET_KEY=true
+ENV NODE_PORT=2222
+ENV INTERNAL_REST_PORT=61001
+ENV RW_NODE_DIR=/opt/rw-node-go
+ENV XRAY_LOCATION_ASSET=/usr/local/share/xray
+ENV FRP_ENABLED=true
+ENV FRP_SERVER_PORT=7000
+ENV FRP_WAIT_FOR_NODE=true
+
+EXPOSE 2222
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD bash -c "</dev/tcp/127.0.0.1/${NODE_PORT:-2222}" || exit 1
+
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.go-paas-frp.sh"]

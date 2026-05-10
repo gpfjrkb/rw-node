@@ -21,6 +21,7 @@ Remnawave Node 轻量化部署方案，**无需 Python**。
 | `ghcr.io/x-dora/rw-node:latest` | 轻量版 (Go Supervisord, 无 Python) | **~380MB** |
 | `ghcr.io/x-dora/rw-node:latest-official` | 官方兼容版 (Python Supervisord) | ~450MB |
 | `ghcr.io/x-dora/rw-node:latest-paas-frp` | PaaS 反向 TCP 隧道版 (内置 frpc) | ~400MB |
+| `ghcr.io/x-dora/rw-node:latest-go-paas-frp` | 非官方 Go 实现 PaaS 反向 TCP 隧道版 (内置 frpc) | 更小 |
 
 ```bash
 # 轻量版（推荐）
@@ -63,6 +64,8 @@ services:
 ### 方式一补充：PaaS + FRP 反向 TCP 隧道
 
 当 PaaS 只提供 HTTP/HTTPS 入站端口，无法直接公开 `NODE_PORT` 的原始 TCP 连接时，可以使用 `latest-paas-frp` 镜像。该镜像会让容器主动连接到你的 VPS 上的 `frps`，由 VPS 对外提供节点 TCP 入口。
+
+如果想使用非官方的 Go 实现，可以改用 `latest-go-paas-frp`。Go 实现来自 [x-dora/rw-node-go](https://github.com/x-dora/rw-node-go)，版本跟随 `rw-node-go` 自己的 release，不跟随 `remnawave/node` 的上游版本号。
 
 连接链路：
 
@@ -122,6 +125,12 @@ sudo systemctl enable --now frps
 ghcr.io/x-dora/rw-node:latest-paas-frp
 ```
 
+Go 实现镜像：
+
+```text
+ghcr.io/x-dora/rw-node:latest-go-paas-frp
+```
+
 必填环境变量：
 
 | 变量名 | 描述 | 示例 |
@@ -137,6 +146,7 @@ ghcr.io/x-dora/rw-node:latest-paas-frp
 |--------|--------|------|
 | `NODE_PORT` | `2222` | rw-node 容器内 HTTPS 监听端口 |
 | `XTLS_API_PORT` | `61000` | Xray API 内部端口，不要公开 |
+| `INTERNAL_REST_PORT` | `61001` | Go 实现镜像的本机 internal REST 端口，不要公开 |
 | `FRP_SERVER_PORT` | `7000` | frps 控制端口 |
 | `FRP_PROXY_NAME` | `rw-node-<随机字符>` | frp 代理唯一名称 |
 | `FRP_PROXY_NAME_PREFIX` | `rw-node` | 自动生成 `FRP_PROXY_NAME` 时使用的前缀 |
@@ -158,6 +168,21 @@ docker run -d \
   -e FRP_TOKEN=REPLACE_WITH_STRONG_RANDOM_TOKEN \
   -e FRP_REMOTE_PORT=22001 \
   ghcr.io/x-dora/rw-node:latest-paas-frp
+```
+
+Go 实现 PaaS 示例：
+
+```bash
+docker run -d \
+  --name rw-node-go-paas \
+  -e SECRET_KEY=YOUR_SECRET_KEY \
+  -e NODE_PORT=2222 \
+  -e INTERNAL_REST_PORT=61001 \
+  -e FRP_SERVER_ADDR=vps.example.com \
+  -e FRP_SERVER_PORT=7000 \
+  -e FRP_TOKEN=REPLACE_WITH_STRONG_RANDOM_TOKEN \
+  -e FRP_REMOTE_PORT=22001 \
+  ghcr.io/x-dora/rw-node:latest-go-paas-frp
 ```
 
 Remnawave Panel 中节点地址填写 VPS 地址和 `FRP_REMOTE_PORT`，例如：
@@ -209,7 +234,22 @@ bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/2.5.2/scripts
 bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/install.sh) \
   --secret-key YOUR_SECRET_KEY \
   --port 2222
+
+# 非官方 Go 实现最简安装（无 Node.js / Supervisord / 外部 Xray）
+bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/install.sh) \
+  --impl go \
+  --secret-key YOUR_SECRET_KEY \
+  --port 2222
+
+# 固定 rw-node-go 版本
+bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/install.sh) \
+  --impl go \
+  --go-version v1.0.3 \
+  --secret-key YOUR_SECRET_KEY \
+  --port 2222
 ```
+
+`--impl go` 使用 [x-dora/rw-node-go](https://github.com/x-dora/rw-node-go) 的 release 包，是非官方 Go 实现；它的 `--go-version` 跟随 `rw-node-go` 的 `v1.x` 项目版本，不是 `remnawave/node` 的 `2.x` 版本。默认不传 `--impl` 时仍安装官方 JS 兼容实现。
 
 #### 管理命令
 
@@ -257,6 +297,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/
 | `NODE_PORT` | 节点端口 | `2222` |
 | `SECRET_KEY` | 面板密钥 | - |
 | `XTLS_API_PORT` | Xray API 端口 | `61000` |
+| `INTERNAL_REST_PORT` | Go 模式本机 Internal REST 端口，不要公开 | `61001` |
 | `RW_NODE_DIR` | 工作目录（所有文件存放位置） | `/opt/rw-node` |
 | `FRP_SERVER_ADDR` | PaaS FRP 版使用的 frps 地址 | - |
 | `FRP_SERVER_PORT` | PaaS FRP 版使用的 frps 端口 | `7000` |
