@@ -47,7 +47,7 @@ COPY --from=build /opt/app/node_modules ./node_modules
 COPY --from=build /opt/app/package*.json ./
 
 RUN set -ex; \
-    apk add --no-cache bash curl tar unzip; \
+    apk add --no-cache bash caddy curl tar unzip; \
     mkdir -p /usr/local/share/xray; \
     if [ "${TARGETARCH}" = "arm64" ]; then \
         SUPERVISORD_ARCH="ARM64"; \
@@ -89,9 +89,12 @@ ENV XTLS_API_PORT=61000
 ENV FRP_ENABLED=true
 ENV FRP_SERVER_PORT=7000
 ENV FRP_WAIT_FOR_NODE=true
+ENV HTTP_FRONT_ENABLED=true
+ENV XHTTP_UPSTREAM_PORT=8080
+ENV WS_UPSTREAM_PORT=8880
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD bash -c "</dev/tcp/127.0.0.1/${NODE_PORT:-2222}" || exit 1
+    CMD bash -c 'if [[ "${HTTP_FRONT_ENABLED:-true}" == "true" ]]; then CHECK_PORT="${HTTP_FRONT_PORT:-${PORT:-3000}}"; elif [[ -n "${PORT:-}" ]]; then CHECK_PORT="${PORT}"; else CHECK_PORT="${NODE_PORT:-2222}"; fi; </dev/tcp/127.0.0.1/${CHECK_PORT}' || exit 1
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.paas-frp.sh"]
 CMD ["node", "dist/src/main"]

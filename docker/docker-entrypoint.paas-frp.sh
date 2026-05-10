@@ -13,7 +13,9 @@ fi
 
 CONF_DIR="${WORK_DIR}/conf"
 FRP_CONF_DIR="${CONF_DIR}/frp"
+CADDY_CONF_DIR="${CONF_DIR}/caddy"
 FRPC_BIN="/usr/local/bin/frpc"
+CADDY_BIN="${CADDY_BIN:-$(command -v caddy 2>/dev/null || true)}"
 RW_NODE_ENTRYPOINT="/usr/local/bin/docker-entrypoint.sh"
 
 FRP_ENABLED="${FRP_ENABLED:-true}"
@@ -23,10 +25,15 @@ FRP_LOCAL_IP="${FRP_LOCAL_IP:-127.0.0.1}"
 FRP_LOCAL_PORT="${FRP_LOCAL_PORT:-${NODE_PORT}}"
 FRP_PROXY_NAME_PREFIX="${FRP_PROXY_NAME_PREFIX:-rw-node}"
 FRP_WAIT_FOR_NODE="${FRP_WAIT_FOR_NODE:-true}"
+HTTP_FRONT_ENABLED="${HTTP_FRONT_ENABLED:-true}"
+HTTP_FRONT_PORT="${HTTP_FRONT_PORT:-${PORT:-3000}}"
+XHTTP_UPSTREAM_PORT="${XHTTP_UPSTREAM_PORT:-8080}"
+WS_UPSTREAM_PORT="${WS_UPSTREAM_PORT:-8880}"
 
 app_pid=""
 frpc_pid=""
 health_pid=""
+caddy_pid=""
 
 is_port() {
     local value="$1"
@@ -82,6 +89,26 @@ wait_for_rw_node() {
     return 1
 }
 
+wait_for_port() {
+    local port="$1"
+    local pid="$2"
+    local i
+
+    for i in $(seq 1 10); do
+        if timeout 2 bash -c "</dev/tcp/127.0.0.1/${port}" >/dev/null 2>&1; then
+            return 0
+        fi
+
+        if [[ -n "${pid}" ]] && ! kill -0 "${pid}" 2>/dev/null; then
+            return 1
+        fi
+
+        sleep 1
+    done
+
+    return 1
+}
+
 terminate() {
     trap - INT TERM
 
@@ -95,6 +122,10 @@ terminate() {
 
     if [[ -n "${health_pid}" ]] && kill -0 "${health_pid}" 2>/dev/null; then
         kill "${health_pid}" 2>/dev/null || true
+    fi
+
+    if [[ -n "${caddy_pid}" ]] && kill -0 "${caddy_pid}" 2>/dev/null; then
+        kill "${caddy_pid}" 2>/dev/null || true
     fi
 
     wait 2>/dev/null || true
@@ -125,6 +156,73 @@ http.createServer((req, res) => {
 }).listen(port, "0.0.0.0");
 ' &
     health_pid=$!
+}
+
+start_caddy_front() {
+    local config_path="${CADDY_CONF_DIR}/Caddyfile"
+
+    if ! is_port "${HTTP_FRONT_PORT}"; then
+        echo "[PaaS FRP] ERROR: HTTP_FRONT_PORT must be a valid TCP port"
+        exit 1
+    fi
+
+    if [[ "${HTTP_FRONT_PORT}" == "${NODE_PORT}" ]]; then
+        echo "[PaaS FRP] ERROR: HTTP_FRONT_PORT must differ from NODE_PORT"
+        exit 1
+    fi
+
+    if ! is_port "${XHTTP_UPSTREAM_PORT}"; then
+        echo "[PaaS FRP] ERROR: XHTTP_UPSTREAM_PORT must be a valid TCP port"
+        exit 1
+    fi
+
+    if ! is_port "${WS_UPSTREAM_PORT}"; then
+        echo "[PaaS FRP] ERROR: WS_UPSTREAM_PORT must be a valid TCP port"
+        exit 1
+    fi
+
+    if [[ ! -x "${CADDY_BIN}" ]]; then
+        echo "[PaaS FRP] ERROR: caddy binary not found"
+        exit 1
+    fi
+
+    mkdir -p "${CADDY_CONF_DIR}"
+
+    cat > "${config_path}" << EOF
+{
+	auto_https off
+	admin off
+}
+
+:${HTTP_FRONT_PORT} {
+	@health path /health
+	respond @health "ok\n" 200
+
+	@xhttp path /xh-*
+	reverse_proxy @xhttp http://127.0.0.1:${XHTTP_UPSTREAM_PORT} {
+		flush_interval -1
+	}
+
+	@ws path /ws-*
+	reverse_proxy @ws http://127.0.0.1:${WS_UPSTREAM_PORT} {
+		flush_interval -1
+	}
+
+	respond 404
+}
+EOF
+
+    "${CADDY_BIN}" validate --config "${config_path}" --adapter caddyfile
+
+    echo "[PaaS FRP] Starting Caddy HTTP front on port ${HTTP_FRONT_PORT}"
+    "${CADDY_BIN}" run --config "${config_path}" --adapter caddyfile &
+    caddy_pid=$!
+
+    if ! wait_for_port "${HTTP_FRONT_PORT}" "${caddy_pid}"; then
+        echo "[PaaS FRP] ERROR: Caddy did not accept TCP connections on 127.0.0.1:${HTTP_FRONT_PORT}"
+        terminate
+        exit 1
+    fi
 }
 
 generate_frpc_config() {
@@ -187,7 +285,14 @@ if ! is_port "${NODE_PORT}"; then
     exit 1
 fi
 
-start_health_server
+if [[ "${HTTP_FRONT_ENABLED}" == "true" ]]; then
+    start_caddy_front
+elif [[ "${HTTP_FRONT_ENABLED}" == "false" ]]; then
+    start_health_server
+else
+    echo "[PaaS FRP] ERROR: HTTP_FRONT_ENABLED must be true or false"
+    exit 1
+fi
 
 "${RW_NODE_ENTRYPOINT}" "$@" &
 app_pid=$!
@@ -226,9 +331,19 @@ else
     exit 1
 fi
 
-if [[ -n "${frpc_pid}" ]]; then
+if [[ -n "${frpc_pid}" && -n "${caddy_pid}" ]]; then
+    set +e
+    wait -n "${app_pid}" "${frpc_pid}" "${caddy_pid}"
+    status=$?
+    set -e
+elif [[ -n "${frpc_pid}" ]]; then
     set +e
     wait -n "${app_pid}" "${frpc_pid}"
+    status=$?
+    set -e
+elif [[ -n "${caddy_pid}" ]]; then
+    set +e
+    wait -n "${app_pid}" "${caddy_pid}"
     status=$?
     set -e
 else

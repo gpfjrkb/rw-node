@@ -14,7 +14,7 @@ LABEL org.opencontainers.image.licenses="AGPL-3.0"
 WORKDIR /opt/rw-node-go
 
 RUN set -ex; \
-    apk add --no-cache bash busybox-extras ca-certificates curl tar; \
+    apk add --no-cache bash busybox-extras caddy ca-certificates curl tar; \
     if [ "${TARGETARCH}" = "arm64" ]; then \
         GO_ASSET="rw-node-go-linux-arm64-v8a.tar.gz"; \
         FRP_ARCH="arm64"; \
@@ -49,10 +49,13 @@ ENV XRAY_LOCATION_ASSET=/usr/local/share/xray
 ENV FRP_ENABLED=true
 ENV FRP_SERVER_PORT=7000
 ENV FRP_WAIT_FOR_NODE=true
+ENV HTTP_FRONT_ENABLED=true
+ENV XHTTP_UPSTREAM_PORT=8080
+ENV WS_UPSTREAM_PORT=8880
 
-EXPOSE 2222
+EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD bash -c "</dev/tcp/127.0.0.1/${NODE_PORT:-2222}" || exit 1
+    CMD bash -c 'if [[ "${HTTP_FRONT_ENABLED:-true}" == "true" ]]; then CHECK_PORT="${HTTP_FRONT_PORT:-${PORT:-3000}}"; elif [[ -n "${PORT:-}" ]]; then CHECK_PORT="${PORT}"; else CHECK_PORT="${NODE_PORT:-2222}"; fi; </dev/tcp/127.0.0.1/${CHECK_PORT}' || exit 1
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.go-paas-frp.sh"]
