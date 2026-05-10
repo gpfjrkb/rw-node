@@ -195,20 +195,25 @@ start_caddy_front() {
 }
 
 :${HTTP_FRONT_PORT} {
-	@health path /health
-	respond @health "ok\n" 200
-
-	@xhttp path /xh-*
-	reverse_proxy @xhttp http://127.0.0.1:${XHTTP_UPSTREAM_PORT} {
-		flush_interval -1
+	handle /health {
+		respond "ok\n" 200
 	}
 
-	@ws path /ws-*
-	reverse_proxy @ws http://127.0.0.1:${WS_UPSTREAM_PORT} {
-		flush_interval -1
+	handle /xh-* {
+		reverse_proxy h2c://127.0.0.1:${XHTTP_UPSTREAM_PORT} {
+			flush_interval -1
+		}
 	}
 
-	respond 404
+	handle /ws-* {
+		reverse_proxy http://127.0.0.1:${WS_UPSTREAM_PORT} {
+			flush_interval -1
+		}
+	}
+
+	handle {
+		respond 404
+	}
 }
 EOF
 
