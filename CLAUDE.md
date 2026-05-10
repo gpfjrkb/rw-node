@@ -72,3 +72,11 @@ PaaS FRP 版额外变量：
 - VPS 侧 frps 只需一次性配置 `bindPort`、`auth.token` 和 `allowPorts` 端口池；新增节点时只需分配新的 `FRP_REMOTE_PORT`，`FRP_PROXY_NAME` 可手动指定或由容器自动生成，不要为每个节点修改 frps 服务端配置
 - 不要把 PaaS 持久化卷挂载到 `/opt/rw-node` 或把 `RW_NODE_DIR` 指向空目录，否则会覆盖/绕开镜像内 `dist/` 和 `node_modules/`，导致入口脚本报 `application entrypoint is missing`
 - 上游版本更新由 Renovate 自动提 PR，合并后自动触发完整构建和发布流程
+
+## 提交规范
+
+- Commit message 必须使用中文描述变更内容。
+- Commit message 应遵循 Conventional Commits 格式：`<type>(<scope>): <中文摘要>`。
+- 常用 `type` 包括 `feat`、`fix`、`perf`、`docs`、`refactor`、`test`、`chore`、`ci`、`build`、`revert`。
+- 摘要使用简洁的中文动宾短语，不以句号结尾。
+- 示例：`perf(haproxy): 优化 xhttp 默认转发延迟`。

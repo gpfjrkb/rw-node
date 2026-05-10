@@ -56,7 +56,8 @@ frontend http_front
     use_backend ws_backend if is_ws
 
 backend xhttp_backend
-    server xhttp 127.0.0.1:${XHTTP_UPSTREAM_PORT} proto h2
+    option http-no-delay
+    server xhttp 127.0.0.1:${XHTTP_UPSTREAM_PORT}
 
 backend ws_backend
     option http-server-close
