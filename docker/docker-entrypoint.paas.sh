@@ -6,42 +6,53 @@ APP_DIR="${RW_NODE_APP_DIR:-/opt/rw-node}"
 WORK_DIR="${RW_NODE_DIR:-${APP_DIR}}"
 
 if [[ ! -f "${WORK_DIR}/dist/src/main" && ! -f "${WORK_DIR}/dist/src/main.js" && -f "${APP_DIR}/dist/src/main.js" ]]; then
-    echo "[PaaS FRP] RW_NODE_DIR=${WORK_DIR} does not contain application files; using RW_NODE_APP_DIR=${APP_DIR}"
+    echo "[PaaS] RW_NODE_DIR=${WORK_DIR} does not contain application files; using RW_NODE_APP_DIR=${APP_DIR}"
     WORK_DIR="${APP_DIR}"
     export RW_NODE_DIR="${WORK_DIR}"
 fi
 
 CONF_DIR="${WORK_DIR}/conf"
-FRP_CONF_DIR="${CONF_DIR}/frp"
 HAPROXY_CONF_DIR="${CONF_DIR}/haproxy"
-FRPC_BIN="/usr/local/bin/frpc"
 HAPROXY_BIN="${HAPROXY_BIN:-$(command -v haproxy 2>/dev/null || true)}"
 HAPROXY_FRONT_LIB="/usr/local/bin/paas-haproxy-front.sh"
-FRP_CLIENT_LIB="/usr/local/bin/paas-frp-client.sh"
-HAPROXY_LOG_PREFIX="[PaaS FRP]"
-FRP_LOG_PREFIX="[PaaS FRP]"
+HAPROXY_LOG_PREFIX="[PaaS]"
 RW_NODE_ENTRYPOINT="/usr/local/bin/docker-entrypoint.sh"
 
 NODE_PORT="${NODE_PORT:-2222}"
-FRP_DEFAULT_PROXY_NAME_PREFIX="rw-node"
 HTTP_FRONT_ENABLED="${HTTP_FRONT_ENABLED:-true}"
 HTTP_FRONT_PORT="${HTTP_FRONT_PORT:-${PORT:-3000}}"
 XHTTP_UPSTREAM_PORT="${XHTTP_UPSTREAM_PORT:-8080}"
 WS_UPSTREAM_PORT="${WS_UPSTREAM_PORT:-8880}"
 
-source "${FRP_CLIENT_LIB}"
+is_port() {
+    [[ "$1" =~ ^[0-9]+$ ]] && (( "$1" >= 1 && "$1" <= 65535 ))
+}
+
+wait_for_port() {
+    local port="$1"
+    local pid="${2:-}"
+
+    for _ in $(seq 1 50); do
+        if [[ -n "${pid}" ]] && ! kill -0 "${pid}" 2>/dev/null; then
+            return 1
+        fi
+
+        if (echo >"/dev/tcp/127.0.0.1/${port}") >/dev/null 2>&1; then
+            return 0
+        fi
+
+        sleep 0.1
+    done
+
+    return 1
+}
 
 app_pid=""
-frpc_pid=""
 health_pid=""
 haproxy_pid=""
 
 terminate() {
     trap - INT TERM
-
-    if [[ -n "${frpc_pid}" ]] && kill -0 "${frpc_pid}" 2>/dev/null; then
-        kill "${frpc_pid}" 2>/dev/null || true
-    fi
 
     if [[ -n "${app_pid}" ]] && kill -0 "${app_pid}" 2>/dev/null; then
         kill "${app_pid}" 2>/dev/null || true
@@ -64,16 +75,16 @@ start_health_server() {
     fi
 
     if ! is_port "${PORT}"; then
-        echo "[PaaS FRP] ERROR: PORT must be a valid TCP port"
+        echo "[PaaS] ERROR: PORT must be a valid TCP port"
         exit 1
     fi
 
     if [[ "${PORT}" == "${NODE_PORT}" ]]; then
-        echo "[PaaS FRP] PORT equals NODE_PORT; skipping auxiliary HTTP health server"
+        echo "[PaaS] PORT equals NODE_PORT; skipping auxiliary HTTP health server"
         return 0
     fi
 
-    echo "[PaaS FRP] Starting auxiliary HTTP health server on port ${PORT}"
+    echo "[PaaS] Starting auxiliary HTTP health server on port ${PORT}"
     node -e '
 const http = require("http");
 const port = Number(process.env.PORT);
@@ -90,7 +101,7 @@ source "${HAPROXY_FRONT_LIB}"
 trap terminate INT TERM
 
 if ! is_port "${NODE_PORT}"; then
-    echo "[PaaS FRP] ERROR: NODE_PORT must be a valid TCP port"
+    echo "[PaaS] ERROR: NODE_PORT must be a valid TCP port"
     exit 1
 fi
 
@@ -99,60 +110,21 @@ if [[ "${HTTP_FRONT_ENABLED}" == "true" ]]; then
 elif [[ "${HTTP_FRONT_ENABLED}" == "false" ]]; then
     start_health_server
 else
-    echo "[PaaS FRP] ERROR: HTTP_FRONT_ENABLED must be true or false"
+    echo "[PaaS] ERROR: HTTP_FRONT_ENABLED must be true or false"
     exit 1
 fi
 
 "${RW_NODE_ENTRYPOINT}" "$@" &
 app_pid=$!
 
-if [[ "${FRP_ENABLED}" == "true" ]]; then
-    if [[ ! -x "${FRPC_BIN}" ]]; then
-        echo "[PaaS FRP] ERROR: frpc binary not found"
-        terminate
-        exit 1
-    fi
-
-    generate_frpc_config
-
-    if [[ "${FRP_WAIT_FOR_NODE}" == "true" ]]; then
-        if ! wait_for_rw_node; then
-            echo "[PaaS FRP] ERROR: rw-node did not accept TCP connections on 127.0.0.1:${NODE_PORT}"
-            terminate
-            exit 1
-        fi
-    elif [[ "${FRP_WAIT_FOR_NODE}" == "false" ]]; then
-        echo "[PaaS FRP] Skipping rw-node TCP readiness check"
-    else
-        echo "[PaaS FRP] ERROR: FRP_WAIT_FOR_NODE must be true or false"
-        terminate
-        exit 1
-    fi
-
-    "${FRPC_BIN}" -c "${FRP_CONF_DIR}/frpc.toml" &
-    frpc_pid=$!
-    echo "[PaaS FRP] frpc started"
-elif [[ "${FRP_ENABLED}" == "false" ]]; then
-    echo "[PaaS FRP] FRP is disabled"
-else
-    echo "[PaaS FRP] ERROR: FRP_ENABLED must be true or false"
-    terminate
-    exit 1
-fi
-
-if [[ -n "${frpc_pid}" && -n "${haproxy_pid}" ]]; then
-    set +e
-    wait -n "${app_pid}" "${frpc_pid}" "${haproxy_pid}"
-    status=$?
-    set -e
-elif [[ -n "${frpc_pid}" ]]; then
-    set +e
-    wait -n "${app_pid}" "${frpc_pid}"
-    status=$?
-    set -e
-elif [[ -n "${haproxy_pid}" ]]; then
+if [[ -n "${haproxy_pid}" ]]; then
     set +e
     wait -n "${app_pid}" "${haproxy_pid}"
+    status=$?
+    set -e
+elif [[ -n "${health_pid}" ]]; then
+    set +e
+    wait -n "${app_pid}" "${health_pid}"
     status=$?
     set -e
 else

@@ -1,4 +1,4 @@
-# PaaS + FRP Dockerfile - rw-node with an outbound frpc TCP tunnel
+# PaaS HTTPS direct Dockerfile
 # Build stage - JS code is platform-independent after build
 FROM --platform=linux/amd64 node:24-alpine AS build
 WORKDIR /opt/app
@@ -32,11 +32,10 @@ FROM node:24-alpine
 
 ARG XRAY_CORE_VERSION=v25.12.8
 ARG SUPERVISORD_VERSION=0.7.3
-ARG FRP_VERSION=0.68.1
 ARG TARGETARCH
 
 LABEL org.opencontainers.image.source="https://github.com/x-dora/rw-node"
-LABEL org.opencontainers.image.description="Remnawave Node - PaaS FRP TCP Tunnel"
+LABEL org.opencontainers.image.description="Remnawave Node - PaaS HTTPS Direct"
 LABEL org.opencontainers.image.licenses="AGPL-3.0"
 
 WORKDIR /opt/rw-node
@@ -52,11 +51,9 @@ RUN set -ex; \
     if [ "${TARGETARCH}" = "arm64" ]; then \
         SUPERVISORD_ARCH="ARM64"; \
         XRAY_ARCH="arm64-v8a"; \
-        FRP_ARCH="arm64"; \
     else \
         SUPERVISORD_ARCH="64-bit"; \
         XRAY_ARCH="64"; \
-        FRP_ARCH="amd64"; \
     fi; \
     curl -fsSL "https://github.com/ochinchina/supervisord/releases/download/v${SUPERVISORD_VERSION}/supervisord_${SUPERVISORD_VERSION}_Linux_${SUPERVISORD_ARCH}.tar.gz" -o /tmp/supervisord.tar.gz; \
     tar -xzf /tmp/supervisord.tar.gz -C /tmp; \
@@ -68,28 +65,20 @@ RUN set -ex; \
     chmod +x /usr/local/bin/xray; \
     mv /tmp/xray/geo*.dat /usr/local/share/xray/ 2>/dev/null || true; \
     ln -sf /usr/local/bin/xray /usr/local/bin/rw-core; \
-    curl -fsSL "https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/frp_${FRP_VERSION}_linux_${FRP_ARCH}.tar.gz" -o /tmp/frp.tar.gz; \
-    tar -xzf /tmp/frp.tar.gz -C /tmp; \
-    mv /tmp/frp_${FRP_VERSION}_linux_${FRP_ARCH}/frpc /usr/local/bin/frpc; \
-    chmod +x /usr/local/bin/frpc; \
     printf '#!/bin/bash\nset -euo pipefail\nWORK_DIR="${RW_NODE_DIR:-/opt/rw-node}"\ntail -n +1 -f "${WORK_DIR}/logs/xray.out.log"\n' > /usr/local/bin/xlogs; \
     printf '#!/bin/bash\nset -euo pipefail\nWORK_DIR="${RW_NODE_DIR:-/opt/rw-node}"\ntail -n +1 -f "${WORK_DIR}/logs/xray.err.log"\n' > /usr/local/bin/xerrors; \
     chmod +x /usr/local/bin/xlogs /usr/local/bin/xerrors; \
     rm -rf /tmp/* /var/cache/apk/*
 
 COPY docker-entrypoint.sh /usr/local/bin/
-COPY paas-frp-client.sh paas-haproxy-front.sh docker-entrypoint.paas-frp.sh /usr/local/bin/
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.paas-frp.sh
+COPY paas-haproxy-front.sh docker-entrypoint.paas.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.paas.sh
 
 ENV NODE_ENV=production
 ENV NODE_OPTIONS="--max-http-header-size=65536"
 ENV RW_NODE_DIR=/opt/rw-node
 ENV NODE_PORT=2222
 ENV XTLS_API_PORT=61000
-ENV FRP_ENABLED=true
-ENV FRP_SERVER_PORT=7000
-ENV FRP_TRANSPORT_PROTOCOL=tcp
-ENV FRP_WAIT_FOR_NODE=true
 ENV HTTP_FRONT_ENABLED=true
 ENV XHTTP_UPSTREAM_PORT=8080
 ENV WS_UPSTREAM_PORT=8880
@@ -97,5 +86,5 @@ ENV WS_UPSTREAM_PORT=8880
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD bash -c 'if [[ "${HTTP_FRONT_ENABLED:-true}" == "true" ]]; then CHECK_PORT="${HTTP_FRONT_PORT:-${PORT:-3000}}"; elif [[ -n "${PORT:-}" ]]; then CHECK_PORT="${PORT}"; else CHECK_PORT="${NODE_PORT:-2222}"; fi; </dev/tcp/127.0.0.1/${CHECK_PORT}' || exit 1
 
-ENTRYPOINT ["/usr/local/bin/docker-entrypoint.paas-frp.sh"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.paas.sh"]
 CMD ["node", "dist/src/main"]

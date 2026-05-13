@@ -32,14 +32,14 @@ jobs:
             dockerfile: docker/Dockerfile.official
             suffix: "-official"
             description: "Official Compatible (Python Supervisord)"
-          - variant: paas-frp
-            dockerfile: docker/Dockerfile.paas-frp
-            suffix: "-paas-frp"
-            description: "PaaS FRP TCP Tunnel"
-          - variant: go-paas-frp
-            dockerfile: docker/Dockerfile.go-paas-frp
-            suffix: "-go-paas-frp"
-            description: "Go Implementation PaaS FRP TCP Tunnel"
+          - variant: paas
+            dockerfile: docker/Dockerfile.paas
+            suffix: "-paas"
+            description: "PaaS HTTPS Direct"
+          - variant: go-paas
+            dockerfile: docker/Dockerfile.go-paas
+            suffix: "-go-paas"
+            description: "Go Implementation PaaS HTTPS Direct"
     
     steps:
       - name: Checkout
@@ -60,7 +60,7 @@ jobs:
 
       - name: Resolve rw-node-go version
         id: go_version
-        if: matrix.variant == 'go-paas-frp'
+        if: matrix.variant == 'go-paas'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -74,7 +74,7 @@ jobs:
       
       - name: Extract metadata
         id: meta
-        if: matrix.variant != 'go-paas-frp'
+        if: matrix.variant != 'go-paas'
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
@@ -86,7 +86,7 @@ jobs:
 
       - name: Extract Go metadata
         id: go_meta
-        if: matrix.variant == 'go-paas-frp'
+        if: matrix.variant == 'go-paas'
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
@@ -97,7 +97,7 @@ jobs:
             org.opencontainers.image.description=${{ matrix.description }}
       
       - name: Build and push
-        if: matrix.variant != 'go-paas-frp'
+        if: matrix.variant != 'go-paas'
         uses: docker/build-push-action@v7
         with:
           context: ./docker
@@ -111,8 +111,8 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Build and push Go PaaS FRP
-        if: matrix.variant == 'go-paas-frp'
+      - name: Build and push Go PaaS
+        if: matrix.variant == 'go-paas'
         uses: docker/build-push-action@v7
         with:
           context: ./docker
@@ -142,7 +142,7 @@ jobs:
           echo "| \`ghcr.io/${{ github.repository }}:latest\` | Lightweight (Go Supervisord) |" >> $GITHUB_STEP_SUMMARY
           echo "| \`ghcr.io/${{ github.repository }}:${{ inputs.version }}-official\` | Official Compatible (Python Supervisord) |" >> $GITHUB_STEP_SUMMARY
           echo "| \`ghcr.io/${{ github.repository }}:latest-official\` | Official Compatible (Python Supervisord) |" >> $GITHUB_STEP_SUMMARY
-          echo "| \`ghcr.io/${{ github.repository }}:${{ inputs.version }}-paas-frp\` | PaaS FRP TCP Tunnel |" >> $GITHUB_STEP_SUMMARY
-          echo "| \`ghcr.io/${{ github.repository }}:latest-paas-frp\` | PaaS FRP TCP Tunnel |" >> $GITHUB_STEP_SUMMARY
-          echo "| \`ghcr.io/${{ github.repository }}:<rw-node-go-version>-go-paas-frp\` | Go Implementation PaaS FRP TCP Tunnel |" >> $GITHUB_STEP_SUMMARY
-          echo "| \`ghcr.io/${{ github.repository }}:latest-go-paas-frp\` | Go Implementation PaaS FRP TCP Tunnel |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`ghcr.io/${{ github.repository }}:${{ inputs.version }}-paas\` | PaaS HTTPS Direct |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`ghcr.io/${{ github.repository }}:latest-paas\` | PaaS HTTPS Direct |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`ghcr.io/${{ github.repository }}:<rw-node-go-version>-go-paas\` | Go Implementation PaaS HTTPS Direct |" >> $GITHUB_STEP_SUMMARY
+          echo "| \`ghcr.io/${{ github.repository }}:latest-go-paas\` | Go Implementation PaaS HTTPS Direct |" >> $GITHUB_STEP_SUMMARY

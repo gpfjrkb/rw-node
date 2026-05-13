@@ -1,6 +1,6 @@
 start_haproxy_front() {
     local config_path="${HAPROXY_CONF_DIR}/haproxy.cfg"
-    local log_prefix="${HAPROXY_LOG_PREFIX:-[PaaS FRP]}"
+    local log_prefix="${HAPROXY_LOG_PREFIX:-[PaaS]}"
 
     if ! is_port "${HTTP_FRONT_PORT}"; then
         echo "${log_prefix} ERROR: HTTP_FRONT_PORT must be a valid TCP port"
