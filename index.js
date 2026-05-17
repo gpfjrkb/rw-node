@@ -156,30 +156,42 @@ function httpsGetJson(url) {
 
 function downloadFile(url, destination) {
   return new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(destination);
     const request = https.get(url, {
       headers: { 'User-Agent': 'rw-node-go-starter' },
     }, (response) => {
       if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
-        file.close(() => fs.rmSync(destination, { force: true }));
         downloadFile(response.headers.location, destination).then(resolve, reject);
         return;
       }
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        file.close(() => fs.rmSync(destination, { force: true }));
         reject(new Error(`download failed with status ${response.statusCode}: ${url}`));
         return;
       }
 
+      const file = fs.createWriteStream(destination);
       response.pipe(file);
       file.on('finish', () => file.close(resolve));
+      file.on('error', (error) => {
+        fs.rmSync(destination, { force: true });
+        reject(error);
+      });
     });
     request.on('error', (error) => {
-      file.close(() => fs.rmSync(destination, { force: true }));
+      fs.rmSync(destination, { force: true });
       reject(error);
     });
   });
+}
+
+function assertDownloadedFile(file, label) {
+  if (!fs.existsSync(file)) {
+    fail(`${label} download did not create expected archive: ${file}`);
+  }
+  if (fs.statSync(file).size === 0) {
+    fs.rmSync(file, { force: true });
+    fail(`${label} download created an empty archive: ${file}`);
+  }
 }
 
 async function resolveCaddyRelease() {
@@ -229,6 +241,7 @@ async function ensureCaddy() {
   fs.mkdirSync(BIN_DIR, { recursive: true });
 
   await downloadFile(url, archive);
+  assertDownloadedFile(archive, 'Caddy');
   run('tar', ['-xzf', archive, '-C', stageDir]);
 
   const stagedBin = path.join(stageDir, 'caddy');
@@ -281,6 +294,7 @@ async function ensureRwNodeGo() {
   fs.mkdirSync(ASSET_DIR, { recursive: true });
 
   await downloadFile(url, archive);
+  assertDownloadedFile(archive, 'rw-node-go');
   run('tar', ['-xzf', archive, '-C', stageDir]);
 
   const stagedBin = path.join(stageDir, 'rw-node-go');
