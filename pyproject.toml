@@ -1,0 +1,9 @@
+[project]
+name = "rw-node-go-paas-starter"
+version = "0.1.0"
+description = "Minimal Python starter that installs and starts rw-node-go with HAProxy."
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.uv]
+package = false
