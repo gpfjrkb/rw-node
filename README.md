@@ -60,36 +60,30 @@ KEY='value'
 
 ## 安装目录
 
-`rw-node-go` 和 Caddy 都安装到仓库根目录下：
+`rw-node-go`、Caddy 和可选的 `cloudflared` 都安装到仓库根目录下：
 
 ```text
 .rw-node-go/
   bin/caddy
+  bin/cloudflared
   bin/rw-node-go
   share/xray/geoip.dat
   share/xray/geosite.dat
   .caddy-version
+  .cloudflared-version
   .rw-node-go-version
   conf/caddy/Caddyfile
   caddy/data/
   caddy/config/
 ```
 
-当 `rw-node-go` 二进制或必需的 Xray 资源文件缺失时，`start.sh` 会下载 `rw-node-go`。当 `CADDY_BIN` 未设置，并且 `.rw-node-go/bin/caddy` 缺失或不可执行时，`start.sh` 会下载 Caddy。
+当 `rw-node-go` 二进制或必需的 Xray 资源文件缺失时，`start.sh` 会下载 `rw-node-go`。当本地 Caddy 缺失或不可执行时，`start.sh` 会下载 Caddy。
+
+当 `ARGO_TOKEN` 非空，并且本地 `cloudflared` 缺失或不可执行时，`start.sh` 会下载 `cloudflared`。
 
 ## Caddy
 
-启动入口优先使用 `CADDY_BIN` 指定的 Caddy 二进制路径，该路径必须存在且可执行。
-
-如果没有设置 `CADDY_BIN`，启动入口会检查 `.rw-node-go/bin/caddy`。如果本地 Caddy 不存在，则通过 `caddyserver/caddy` 的 GitHub Releases API 获取 release 信息，按当前 Linux 架构选择官方 `tar.gz` 资产，解压出 `caddy`，复制到 `.rw-node-go/bin/caddy`，并设置权限为 `755`。
-
-可以设置 `CADDY_VERSION` 安装指定 Caddy release tag，例如：
-
-```text
-CADDY_VERSION=v2.11.3
-```
-
-未设置 `CADDY_VERSION` 时，启动入口使用 GitHub latest release。
+启动入口会检查 `.rw-node-go/bin/caddy`。如果本地 Caddy 不存在，则通过 `caddyserver/caddy` 的 GitHub Releases API 获取 release 信息，按当前 Linux 架构选择官方 `tar.gz` 资产，解压出 `caddy`，复制到 `.rw-node-go/bin/caddy`，并设置权限为 `755`。
 
 Caddy 子进程会使用适合 rootless PaaS 的目录：
 
@@ -147,12 +141,37 @@ WS_UPSTREAM_PORT=8880
 
 可以设置 `RW_NODE_GO_VERSION` 安装指定 `x-dora/rw-node-go` release。未设置时，启动入口使用 GitHub latest release。
 
-Caddy 相关变量：
+Cloudflare Tunnel 开关：
 
 ```text
-CADDY_BIN=/path/to/caddy
-CADDY_VERSION=v2.11.3
+ARGO_TOKEN=
 ```
+
+`ARGO_TOKEN` 非空时，启动入口会自动启动 `cloudflared`：
+
+```bash
+cloudflared tunnel --no-autoupdate --protocol http2 --tag "rw_node_port=$HTTP_FRONT_PORT" run --token "$ARGO_TOKEN"
+```
+
+## Cloudflare Tunnel
+
+`ARGO_TOKEN` 指 Cloudflare remotely-managed tunnel token，不是 Cloudflare API token。只要该变量非空，启动入口就会把 `cloudflared` 作为受管子进程启动。
+
+Cloudflare 侧 Public hostname / Published application 的 Service 应配置为：
+
+```text
+http://localhost:${HTTP_FRONT_PORT}
+```
+
+启动器不会直接把内部端口暴露到公网。`HTTP_FRONT_PORT` 是 Caddy 的统一入口，Caddy 再按路径转发到 `XHTTP_UPSTREAM_PORT`、`WS_UPSTREAM_PORT` 和 `NODE_PORT`。这种方式让隧道只穿透一个本地端口，避免 Cloudflare 侧配置多个内部服务端口。
+
+`cloudflared` 启动时会附带：
+
+```text
+--tag "rw_node_port=${HTTP_FRONT_PORT}"
+```
+
+这个 tag 用于让 Cloudflare 连接器侧看到当前节点期望穿透的端口元信息；它不替代 Cloudflare 侧的 Public hostname 路由配置。仅凭 `ARGO_TOKEN` 本身，启动器无法动态修改 Cloudflare 侧 hostname 到本地端口的映射。
 
 端口校验规则：
 
@@ -180,8 +199,10 @@ CADDY_VERSION=v2.11.3
 2. 校验平台、架构和端口。
 3. 确保 Caddy 已安装。
 4. 确保 `rw-node-go` 已安装。
-5. 生成 `.rw-node-go/conf/caddy/Caddyfile`。
-6. 使用 `caddy validate --config .rw-node-go/conf/caddy/Caddyfile --adapter caddyfile` 校验配置；校验成功时只输出一行启动器日志，校验失败时输出 Caddy 原始错误。
-7. 使用 `caddy run --config .rw-node-go/conf/caddy/Caddyfile --adapter caddyfile` 启动 Caddy。
-8. 启动 `rw-node-go`。
-9. 当任一子进程提前退出，或启动入口收到 `SIGINT` / `SIGTERM` 时，终止 Caddy 和 `rw-node-go`。
+5. 当 `ARGO_TOKEN` 非空时，确保 `cloudflared` 已安装。
+6. 生成 `.rw-node-go/conf/caddy/Caddyfile`。
+7. 使用 `caddy validate --config .rw-node-go/conf/caddy/Caddyfile --adapter caddyfile` 校验配置；校验成功时只输出一行启动器日志，校验失败时输出 Caddy 原始错误。
+8. 使用 `caddy run --config .rw-node-go/conf/caddy/Caddyfile --adapter caddyfile` 启动 Caddy。
+9. 启动 `rw-node-go`。
+10. 当 `ARGO_TOKEN` 非空时，启动 `cloudflared tunnel run --token "$ARGO_TOKEN"`，并使用 HTTP/2 连接 Cloudflare。
+11. 当任一子进程提前退出，或启动入口收到 `SIGINT` / `SIGTERM` 时，终止 Caddy、`rw-node-go` 和可选的 `cloudflared`。

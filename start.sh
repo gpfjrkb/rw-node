@@ -4,6 +4,7 @@ set -Eeuo pipefail
 PREFIX="[bash-starter]"
 REPO="x-dora/rw-node-go"
 CADDY_REPO="caddyserver/caddy"
+CLOUDFLARED_REPO="cloudflare/cloudflared"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 CWD="$SCRIPT_DIR"
@@ -15,14 +16,18 @@ CADDY_DATA_DIR="$INSTALL_DIR/caddy/data"
 CADDY_CONFIG_DIR="$INSTALL_DIR/caddy/config"
 APP_BIN="$BIN_DIR/rw-node-go"
 CADDY_BIN_DEFAULT="$BIN_DIR/caddy"
+CLOUDFLARED_BIN_DEFAULT="$BIN_DIR/cloudflared"
 VERSION_FILE="$INSTALL_DIR/.rw-node-go-version"
 CADDY_VERSION_FILE="$INSTALL_DIR/.caddy-version"
+CLOUDFLARED_VERSION_FILE="$INSTALL_DIR/.cloudflared-version"
 CADDYFILE="$CONF_DIR/Caddyfile"
 
 caddy_pid=""
 app_pid=""
+cloudflared_pid=""
 shutting_down=0
 caddy_bin_resolved=""
+cloudflared_bin_resolved=""
 
 log() {
   printf '%s %s\n' "$PREFIX" "$*"
@@ -131,8 +136,11 @@ set_default_env() {
   [[ -v HTTP_FRONT_PORT ]] || HTTP_FRONT_PORT="${PORT:-3000}"
   [[ -v XHTTP_UPSTREAM_PORT ]] || XHTTP_UPSTREAM_PORT=8080
   [[ -v WS_UPSTREAM_PORT ]] || WS_UPSTREAM_PORT=8880
+  [[ -v ARGO_TOKEN ]] || ARGO_TOKEN=
+  [[ -v ARGO_LOG_LEVEL ]] || ARGO_LOG_LEVEL=info
   export NODE_PORT NODE_TLS_CLIENT_AUTH INTERNAL_REST_PORT REQUIRE_SECRET_KEY
   export RW_NODE_DIR XRAY_LOCATION_ASSET HTTP_FRONT_PORT XHTTP_UPSTREAM_PORT WS_UPSTREAM_PORT
+  export ARGO_TOKEN ARGO_LOG_LEVEL
 }
 
 ensure_linux() {
@@ -151,6 +159,14 @@ detect_caddy_asset_regex() {
   case "$(uname -m)" in
     x86_64|amd64) printf '%s' '^caddy_.*_linux_amd64\.tar\.gz$' ;;
     aarch64|arm64) printf '%s' '^caddy_.*_linux_arm64\.tar\.gz$' ;;
+    *) fail "unsupported architecture: $(uname -m); only x64/arm64 is supported" ;;
+  esac
+}
+
+detect_cloudflared_asset_name() {
+  case "$(uname -m)" in
+    x86_64|amd64) printf '%s' "cloudflared-linux-amd64" ;;
+    aarch64|arm64) printf '%s' "cloudflared-linux-arm64" ;;
     *) fail "unsupported architecture: $(uname -m); only x64/arm64 is supported" ;;
   esac
 }
@@ -203,6 +219,14 @@ resolve_caddy_release_json() {
   fi
 }
 
+resolve_cloudflared_release_json() {
+  if [[ -n "${CLOUDFLARED_VERSION:-}" ]]; then
+    github_api_get "https://api.github.com/repos/$CLOUDFLARED_REPO/releases/tags/$CLOUDFLARED_VERSION"
+  else
+    github_api_get "https://api.github.com/repos/$CLOUDFLARED_REPO/releases/latest"
+  fi
+}
+
 find_caddy_download_url() {
   local release_json="$1"
   local regex
@@ -212,6 +236,23 @@ find_caddy_download_url() {
   while IFS= read -r url; do
     name="${url##*/}"
     if [[ "$name" =~ $regex ]]; then
+      printf '%s' "$url"
+      return 0
+    fi
+  done < <(
+    grep -oE '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]+"' <<< "$release_json" \
+      | sed -E 's/^"browser_download_url"[[:space:]]*:[[:space:]]*"([^"]+)"/\1/'
+  )
+}
+
+find_release_asset_download_url() {
+  local release_json="$1"
+  local asset_name="$2"
+  local url name
+
+  while IFS= read -r url; do
+    name="${url##*/}"
+    if [[ "$name" == "$asset_name" ]]; then
       printf '%s' "$url"
       return 0
     fi
@@ -258,6 +299,45 @@ ensure_caddy() {
   printf '%s\n' "$tag" > "$CADDY_VERSION_FILE"
   rm -rf "$tmp_dir"
   caddy_bin_resolved="$CADDY_BIN_DEFAULT"
+}
+
+cloudflare_tunnel_enabled() {
+  [[ -n "${ARGO_TOKEN:-}" ]]
+}
+
+ensure_cloudflared() {
+  if [[ -n "${CLOUDFLARED_BIN:-}" ]]; then
+    [[ -f "$CLOUDFLARED_BIN" ]] || fail "CLOUDFLARED_BIN does not exist: $CLOUDFLARED_BIN"
+    [[ -x "$CLOUDFLARED_BIN" ]] || fail "CLOUDFLARED_BIN is not executable: $CLOUDFLARED_BIN"
+    cloudflared_bin_resolved="$CLOUDFLARED_BIN"
+    return 0
+  fi
+
+  if [[ -x "$CLOUDFLARED_BIN_DEFAULT" ]]; then
+    log "cloudflared already installed; skipping download"
+    cloudflared_bin_resolved="$CLOUDFLARED_BIN_DEFAULT"
+    return 0
+  fi
+
+  local release_json tag asset_name url tmp_dir staged_bin
+  release_json="$(resolve_cloudflared_release_json)"
+  tag="$(extract_json_string "tag_name" <<< "$release_json")"
+  [[ -n "$tag" ]] || fail "unable to resolve cloudflared release assets"
+  asset_name="$(detect_cloudflared_asset_name)"
+  url="$(find_release_asset_download_url "$release_json" "$asset_name")"
+  [[ -n "$url" ]] || fail "cloudflared $tag does not provide $asset_name"
+  tmp_dir="$INSTALL_DIR/tmp"
+  staged_bin="$tmp_dir/$asset_name"
+
+  log "installing cloudflared $tag"
+  rm -rf "$tmp_dir"
+  mkdir -p "$tmp_dir" "$BIN_DIR"
+  download_file "$url" "$staged_bin"
+  cp "$staged_bin" "$CLOUDFLARED_BIN_DEFAULT"
+  chmod 755 "$CLOUDFLARED_BIN_DEFAULT"
+  printf '%s\n' "$tag" > "$CLOUDFLARED_VERSION_FILE"
+  rm -rf "$tmp_dir"
+  cloudflared_bin_resolved="$CLOUDFLARED_BIN_DEFAULT"
 }
 
 resolve_rw_node_go_version() {
@@ -371,7 +451,7 @@ cleanup() {
   fi
   shutting_down=1
 
-  for pid in "$app_pid" "$caddy_pid"; do
+  for pid in "$app_pid" "$caddy_pid" "$cloudflared_pid"; do
     if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
       kill -TERM "$pid" 2>/dev/null || true
     fi
@@ -381,7 +461,7 @@ cleanup() {
   local timer_pid=$!
   while kill -0 "$timer_pid" 2>/dev/null; do
     local all_done=1
-    for pid in "$app_pid" "$caddy_pid"; do
+    for pid in "$app_pid" "$caddy_pid" "$cloudflared_pid"; do
       if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
         all_done=0
       fi
@@ -391,7 +471,7 @@ cleanup() {
   done
   kill "$timer_pid" 2>/dev/null || true
 
-  for pid in "$app_pid" "$caddy_pid"; do
+  for pid in "$app_pid" "$caddy_pid" "$cloudflared_pid"; do
     if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
       kill -KILL "$pid" 2>/dev/null || true
     fi
@@ -399,6 +479,7 @@ cleanup() {
 
   wait "$app_pid" 2>/dev/null || true
   wait "$caddy_pid" 2>/dev/null || true
+  wait "$cloudflared_pid" 2>/dev/null || true
   exit "$code"
 }
 
@@ -419,6 +500,11 @@ inspect_env_if_requested() {
   printf 'WS_UPSTREAM_PORT=%s\n' "$WS_UPSTREAM_PORT"
   printf 'CADDY_BIN=%s\n' "${CADDY_BIN:-}"
   printf 'CADDY_VERSION=%s\n' "${CADDY_VERSION:-}"
+  printf 'ARGO_TOKEN_SET=%s\n' "$(cloudflare_tunnel_enabled && printf 'true' || printf 'false')"
+  printf 'ARGO_LOG_LEVEL=%s\n' "$ARGO_LOG_LEVEL"
+  printf 'CLOUDFLARED_BIN=%s\n' "${CLOUDFLARED_BIN:-}"
+  printf 'CLOUDFLARED_VERSION=%s\n' "${CLOUDFLARED_VERSION:-}"
+  printf 'CLOUDFLARE_TUNNEL_TARGET=http://localhost:%s\n' "$HTTP_FRONT_PORT"
   printf 'RW_NODE_GO_VERSION=%s\n' "${RW_NODE_GO_VERSION:-}"
   exit 0
 }
@@ -444,6 +530,9 @@ main() {
 
   ensure_caddy
   ensure_rw_node_go
+  if cloudflare_tunnel_enabled; then
+    ensure_cloudflared
+  fi
   write_caddyfile
   mkdir -p "$CADDY_DATA_DIR" "$CADDY_CONFIG_DIR"
 
@@ -469,6 +558,13 @@ main() {
   "$APP_BIN" &
   app_pid=$!
 
+  if cloudflare_tunnel_enabled; then
+    log "starting Cloudflare Tunnel to http://localhost:$HTTP_FRONT_PORT"
+    "$cloudflared_bin_resolved" tunnel --no-autoupdate --protocol http2 --loglevel "$ARGO_LOG_LEVEL" \
+      --tag "rw_node_port=$HTTP_FRONT_PORT" run --token "$ARGO_TOKEN" &
+    cloudflared_pid=$!
+  fi
+
   while true; do
     if ! kill -0 "$caddy_pid" 2>/dev/null; then
       wait "$caddy_pid" || true
@@ -478,6 +574,11 @@ main() {
     if ! kill -0 "$app_pid" 2>/dev/null; then
       wait "$app_pid" || true
       log "rw-node-go exited"
+      cleanup 1
+    fi
+    if cloudflare_tunnel_enabled && ! kill -0 "$cloudflared_pid" 2>/dev/null; then
+      wait "$cloudflared_pid" || true
+      log "cloudflared exited"
       cleanup 1
     fi
     sleep 0.5
