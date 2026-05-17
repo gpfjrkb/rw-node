@@ -560,8 +560,16 @@ main() {
 
   if cloudflare_tunnel_enabled; then
     log "starting Cloudflare Tunnel to http://localhost:$HTTP_FRONT_PORT"
-    "$cloudflared_bin_resolved" tunnel --no-autoupdate --protocol http2 --loglevel "$ARGO_LOG_LEVEL" \
-      --tag "rw_node_port=$HTTP_FRONT_PORT" run --token "$ARGO_TOKEN" &
+    "$cloudflared_bin_resolved" tunnel \
+      --no-autoupdate \
+      --protocol http2 \
+      --edge-ip-version auto \
+      --loglevel "$ARGO_LOG_LEVEL" \
+      --tag "rw_node_port=$HTTP_FRONT_PORT" \
+      run \
+      --dns-resolver-addrs 1.1.1.1:53 \
+      --dns-resolver-addrs 1.0.0.1:53 \
+      --token "$ARGO_TOKEN" &
     cloudflared_pid=$!
   fi
 
