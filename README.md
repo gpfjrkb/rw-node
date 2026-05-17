@@ -173,6 +173,8 @@ http://localhost:${HTTP_FRONT_PORT}
 
 这个 tag 用于让 Cloudflare 连接器侧看到当前节点期望穿透的端口元信息；它不替代 Cloudflare 侧的 Public hostname 路由配置。仅凭 `ARGO_TOKEN` 本身，启动器无法动态修改 Cloudflare 侧 hostname 到本地端口的映射。
 
+如果运行环境的 DNS resolver 无法解析 Cloudflare Tunnel 的 SRV 记录，例如 `_v2-origintunneld._tcp.argotunnel.com`，`cloudflared` 会退出并输出 edge discovery 错误。这属于运行环境 DNS 问题，需要调整 PaaS 的 DNS/网络配置或更换可解析该记录的 resolver。启动器会记录 `cloudflared exited; continuing without Cloudflare Tunnel`，并保持 Caddy 与 `rw-node-go` 继续运行。
+
 端口校验规则：
 
 - `HTTP_FRONT_PORT`、`NODE_PORT`、`XHTTP_UPSTREAM_PORT`、`WS_UPSTREAM_PORT` 必须是合法 TCP 端口。
@@ -205,4 +207,5 @@ http://localhost:${HTTP_FRONT_PORT}
 8. 使用 `caddy run --config .rw-node-go/conf/caddy/Caddyfile --adapter caddyfile` 启动 Caddy。
 9. 启动 `rw-node-go`。
 10. 当 `ARGO_TOKEN` 非空时，启动 `cloudflared tunnel run --token "$ARGO_TOKEN"`，并使用 HTTP/2 连接 Cloudflare。
-11. 当任一子进程提前退出，或启动入口收到 `SIGINT` / `SIGTERM` 时，终止 Caddy、`rw-node-go` 和可选的 `cloudflared`。
+11. 当 Caddy 或 `rw-node-go` 提前退出，或启动入口收到 `SIGINT` / `SIGTERM` 时，终止所有子进程。
+12. 当可选的 `cloudflared` 提前退出时，记录日志并保持 Caddy 与 `rw-node-go` 继续运行。

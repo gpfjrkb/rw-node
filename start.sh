@@ -576,10 +576,10 @@ main() {
       log "rw-node-go exited"
       cleanup 1
     fi
-    if cloudflare_tunnel_enabled && ! kill -0 "$cloudflared_pid" 2>/dev/null; then
+    if [[ -n "$cloudflared_pid" ]] && ! kill -0 "$cloudflared_pid" 2>/dev/null; then
       wait "$cloudflared_pid" || true
-      log "cloudflared exited"
-      cleanup 1
+      log "cloudflared exited; continuing without Cloudflare Tunnel"
+      cloudflared_pid=""
     fi
     sleep 0.5
   done
