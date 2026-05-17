@@ -13,12 +13,17 @@ const CWD = process.cwd();
 const INSTALL_DIR = path.join(CWD, '.rw-node-go');
 const BIN_DIR = path.join(INSTALL_DIR, 'bin');
 const ASSET_DIR = path.join(INSTALL_DIR, 'share', 'xray');
-const CONF_DIR = path.join(INSTALL_DIR, 'conf', 'haproxy');
+const CADDY_REPO = 'caddyserver/caddy';
+const CONF_DIR = path.join(INSTALL_DIR, 'conf', 'caddy');
+const CADDY_DATA_DIR = path.join(INSTALL_DIR, 'caddy', 'data');
+const CADDY_CONFIG_DIR = path.join(INSTALL_DIR, 'caddy', 'config');
 const APP_BIN = path.join(BIN_DIR, 'rw-node-go');
+const CADDY_BIN = path.join(BIN_DIR, 'caddy');
 const VERSION_FILE = path.join(INSTALL_DIR, '.rw-node-go-version');
-const HAPROXY_CONF = path.join(CONF_DIR, 'haproxy.cfg');
+const CADDY_VERSION_FILE = path.join(INSTALL_DIR, '.caddy-version');
+const CADDYFILE = path.join(CONF_DIR, 'Caddyfile');
 
-let haproxyProcess = null;
+let caddyProcess = null;
 let appProcess = null;
 let shuttingDown = false;
 
@@ -50,24 +55,6 @@ function run(command, args, options = {}) {
   return result;
 }
 
-function commandExists(command) {
-  const result = spawnSync('sh', ['-c', `command -v ${quoteShell(command)} >/dev/null 2>&1`], {
-    encoding: 'utf8',
-  });
-  return result.status === 0;
-}
-
-function resolveCommand(command) {
-  const result = spawnSync('sh', ['-c', `command -v ${quoteShell(command)}`], {
-    encoding: 'utf8',
-  });
-  return result.status === 0 ? result.stdout.trim() : '';
-}
-
-function quoteShell(value) {
-  return `'${String(value).replace(/'/g, `'\\''`)}'`;
-}
-
 function ensureLinux() {
   if (process.platform !== 'linux') {
     fail(`unsupported platform: ${process.platform}; only Linux x64/arm64 is supported`);
@@ -78,6 +65,13 @@ function detectAssetName() {
   const arch = os.arch();
   if (arch === 'x64') return 'rw-node-go-linux-64.tar.gz';
   if (arch === 'arm64') return 'rw-node-go-linux-arm64-v8a.tar.gz';
+  fail(`unsupported architecture: ${arch}; only x64/arm64 is supported`);
+}
+
+function detectCaddyAssetPattern() {
+  const arch = os.arch();
+  if (arch === 'x64') return /^caddy_.*_linux_amd64\.tar\.gz$/;
+  if (arch === 'arm64') return /^caddy_.*_linux_arm64\.tar\.gz$/;
   fail(`unsupported architecture: ${arch}; only x64/arm64 is supported`);
 }
 
@@ -99,6 +93,15 @@ function buildEnv() {
   return env;
 }
 
+function buildCaddyEnv(env) {
+  return {
+    ...env,
+    HOME: CWD,
+    XDG_DATA_HOME: CADDY_DATA_DIR,
+    XDG_CONFIG_HOME: CADDY_CONFIG_DIR,
+  };
+}
+
 function validatePorts(env) {
   const names = ['HTTP_FRONT_PORT', 'NODE_PORT', 'XHTTP_UPSTREAM_PORT', 'WS_UPSTREAM_PORT'];
   for (const name of names) {
@@ -112,38 +115,13 @@ function validatePorts(env) {
   }
 }
 
-function ensureHaproxy() {
-  if (process.env.HAPROXY_BIN) {
-    if (!fs.existsSync(process.env.HAPROXY_BIN)) {
-      fail(`HAPROXY_BIN does not exist: ${process.env.HAPROXY_BIN}`);
-    }
-    return process.env.HAPROXY_BIN;
+function isExecutable(file) {
+  try {
+    fs.accessSync(file, fs.constants.X_OK);
+    return true;
+  } catch (_) {
+    return false;
   }
-
-  const existing = resolveCommand('haproxy');
-  if (existing) {
-    return existing;
-  }
-
-  log('haproxy not found; attempting system package install');
-  if (commandExists('apk')) {
-    run('apk', ['add', '--no-cache', 'haproxy'], { stdio: 'inherit' });
-  } else if (commandExists('apt-get')) {
-    run('apt-get', ['update'], { stdio: 'inherit' });
-    run('apt-get', ['install', '-y', 'haproxy'], { stdio: 'inherit' });
-  } else if (commandExists('dnf')) {
-    run('dnf', ['install', '-y', 'haproxy'], { stdio: 'inherit' });
-  } else if (commandExists('yum')) {
-    run('yum', ['install', '-y', 'haproxy'], { stdio: 'inherit' });
-  } else {
-    fail('haproxy not found and no supported package manager was detected; install haproxy or set HAPROXY_BIN');
-  }
-
-  const installed = resolveCommand('haproxy');
-  if (!installed) {
-    fail('haproxy installation finished but haproxy is still not available; install haproxy or set HAPROXY_BIN');
-  }
-  return installed;
 }
 
 function httpsGetJson(url) {
@@ -204,6 +182,67 @@ function downloadFile(url, destination) {
   });
 }
 
+async function resolveCaddyRelease() {
+  const version = process.env.CADDY_VERSION;
+  const url = version
+    ? `https://api.github.com/repos/${CADDY_REPO}/releases/tags/${version}`
+    : `https://api.github.com/repos/${CADDY_REPO}/releases/latest`;
+  const release = await httpsGetJson(url);
+  if (!release.tag_name || !Array.isArray(release.assets)) {
+    fail('unable to resolve Caddy release assets');
+  }
+  return release;
+}
+
+function findCaddyDownloadUrl(release) {
+  const pattern = detectCaddyAssetPattern();
+  const asset = release.assets.find(item => pattern.test(item.name || ''));
+  if (!asset || !asset.browser_download_url) {
+    fail(`Caddy ${release.tag_name} does not provide a supported Linux asset for ${os.arch()}`);
+  }
+  return asset.browser_download_url;
+}
+
+async function ensureCaddy() {
+  if (process.env.CADDY_BIN) {
+    if (!fs.existsSync(process.env.CADDY_BIN)) {
+      fail(`CADDY_BIN does not exist: ${process.env.CADDY_BIN}`);
+    }
+    return process.env.CADDY_BIN;
+  }
+
+  if (fs.existsSync(CADDY_BIN) && isExecutable(CADDY_BIN)) {
+    log('Caddy already installed; skipping download');
+    return CADDY_BIN;
+  }
+
+  const release = await resolveCaddyRelease();
+  const url = findCaddyDownloadUrl(release);
+  const assetName = path.basename(new URL(url).pathname);
+  const tmpDir = path.join(INSTALL_DIR, 'tmp');
+  const archive = path.join(tmpDir, assetName);
+  const stageDir = path.join(tmpDir, 'caddy-stage');
+
+  log(`installing Caddy ${release.tag_name}`);
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+  fs.mkdirSync(stageDir, { recursive: true });
+  fs.mkdirSync(BIN_DIR, { recursive: true });
+
+  await downloadFile(url, archive);
+  run('tar', ['-xzf', archive, '-C', stageDir]);
+
+  const stagedBin = path.join(stageDir, 'caddy');
+  if (!fs.existsSync(stagedBin)) {
+    fail('Caddy release asset is missing caddy');
+  }
+
+  fs.copyFileSync(stagedBin, CADDY_BIN);
+  fs.chmodSync(CADDY_BIN, 0o755);
+  fs.writeFileSync(CADDY_VERSION_FILE, `${release.tag_name}\n`);
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+  return CADDY_BIN;
+}
+
 async function resolveRwNodeGoVersion() {
   if (process.env.RW_NODE_GO_VERSION) {
     return process.env.RW_NODE_GO_VERSION;
@@ -260,49 +299,46 @@ async function ensureRwNodeGo() {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 }
 
-function writeHaproxyConfig(env) {
+function writeCaddyfile(env) {
   fs.mkdirSync(CONF_DIR, { recursive: true });
-  fs.writeFileSync(HAPROXY_CONF, `global
-    maxconn 1024
-    nbthread 1
-    log stdout format raw local0 warning
+  fs.writeFileSync(CADDYFILE, `{
+    admin localhost:2019
+    auto_https off
+}
 
-defaults
-    mode http
-    log global
-    option dontlognull
-    timeout connect 5s
-    timeout client 1h
-    timeout server 1h
-    timeout tunnel 1h
+http://:${env.HTTP_FRONT_PORT} {
+    handle /health {
+        respond "ok\\n" 200
+    }
 
-frontend http_front
-    bind *:${env.HTTP_FRONT_PORT}
-    acl is_health path -i /health
-    acl is_xh path_beg -i /xh-
-    acl is_ws path_beg -i /ws-
-    acl is_node_api path_beg -i /node/
-    acl is_vision_api path_beg -i /vision/
+    handle /xh-* {
+        reverse_proxy 127.0.0.1:${env.XHTTP_UPSTREAM_PORT}
+    }
 
-    http-request return status 200 content-type text/plain string "ok\\n" if is_health
-    http-request return status 404 if !is_health !is_xh !is_ws !is_node_api !is_vision_api
-    use_backend xhttp_backend if is_xh
-    use_backend ws_backend if is_ws
-    use_backend node_api_backend if is_node_api
-    use_backend node_api_backend if is_vision_api
+    handle /ws-* {
+        reverse_proxy 127.0.0.1:${env.WS_UPSTREAM_PORT}
+    }
 
-backend xhttp_backend
-    option http-no-delay
-    server xhttp 127.0.0.1:${env.XHTTP_UPSTREAM_PORT}
+    handle /node/* {
+        reverse_proxy https://127.0.0.1:${env.NODE_PORT} {
+            transport http {
+                tls_insecure_skip_verify
+            }
+        }
+    }
 
-backend ws_backend
-    option http-server-close
-    timeout tunnel 1h
-    server ws 127.0.0.1:${env.WS_UPSTREAM_PORT}
+    handle /vision/* {
+        reverse_proxy https://127.0.0.1:${env.NODE_PORT} {
+            transport http {
+                tls_insecure_skip_verify
+            }
+        }
+    }
 
-backend node_api_backend
-    option http-server-close
-    server node_api 127.0.0.1:${env.NODE_PORT} ssl verify none
+    handle {
+        respond 404
+    }
+}
 `);
 }
 
@@ -318,7 +354,7 @@ function terminate(code = 0) {
   if (shuttingDown) return;
   shuttingDown = true;
 
-  const children = [appProcess, haproxyProcess].filter(Boolean);
+  const children = [appProcess, caddyProcess].filter(Boolean);
   if (children.length === 0) {
     process.exit(code);
   }
@@ -343,15 +379,18 @@ async function main() {
   ensureLinux();
   const env = buildEnv();
   validatePorts(env);
+  const caddyEnv = buildCaddyEnv(env);
 
-  const haproxyBin = ensureHaproxy();
+  const caddyBin = await ensureCaddy();
   await ensureRwNodeGo();
-  writeHaproxyConfig(env);
+  writeCaddyfile(env);
+  fs.mkdirSync(CADDY_DATA_DIR, { recursive: true });
+  fs.mkdirSync(CADDY_CONFIG_DIR, { recursive: true });
 
-  run(haproxyBin, ['-c', '-f', HAPROXY_CONF], { env });
+  run(caddyBin, ['validate', '--config', CADDYFILE, '--adapter', 'caddyfile'], { env: caddyEnv });
 
-  log(`starting HAProxy on port ${env.HTTP_FRONT_PORT}`);
-  haproxyProcess = spawnManaged(haproxyBin, ['-W', '-db', '-f', HAPROXY_CONF], env);
+  log(`starting Caddy on port ${env.HTTP_FRONT_PORT}`);
+  caddyProcess = spawnManaged(caddyBin, ['run', '--config', CADDYFILE, '--adapter', 'caddyfile'], caddyEnv);
 
   log('starting rw-node-go');
   appProcess = spawnManaged(APP_BIN, [], env);
@@ -362,7 +401,7 @@ async function main() {
     terminate(1);
   };
 
-  haproxyProcess.on('exit', handleExit('haproxy'));
+  caddyProcess.on('exit', handleExit('caddy'));
   appProcess.on('exit', handleExit('rw-node-go'));
 }
 

@@ -2,7 +2,7 @@
   "name": "rw-node-go-paas-starter",
   "version": "0.1.0",
   "private": true,
-  "description": "Minimal Node.js starter that installs and starts rw-node-go with HAProxy.",
+  "description": "Minimal Node.js starter that installs and starts rw-node-go with Caddy.",
   "type": "commonjs",
   "engines": {
     "node": ">=18"

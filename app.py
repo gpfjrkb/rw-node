@@ -14,16 +14,21 @@ from pathlib import Path
 
 PREFIX = "[python-starter]"
 REPO = "x-dora/rw-node-go"
+CADDY_REPO = "caddyserver/caddy"
 CWD = Path.cwd()
 INSTALL_DIR = CWD / ".rw-node-go"
 BIN_DIR = INSTALL_DIR / "bin"
 ASSET_DIR = INSTALL_DIR / "share" / "xray"
-CONF_DIR = INSTALL_DIR / "conf" / "haproxy"
+CONF_DIR = INSTALL_DIR / "conf" / "caddy"
+CADDY_DATA_DIR = INSTALL_DIR / "caddy" / "data"
+CADDY_CONFIG_DIR = INSTALL_DIR / "caddy" / "config"
 APP_BIN = BIN_DIR / "rw-node-go"
+CADDY_BIN = BIN_DIR / "caddy"
 VERSION_FILE = INSTALL_DIR / ".rw-node-go-version"
-HAPROXY_CONF = CONF_DIR / "haproxy.cfg"
+CADDY_VERSION_FILE = INSTALL_DIR / ".caddy-version"
+CADDYFILE = CONF_DIR / "Caddyfile"
 
-haproxy_process = None
+caddy_process = None
 app_process = None
 shutting_down = False
 
@@ -72,6 +77,15 @@ def detect_asset_name() -> str:
     fail(f"unsupported architecture: {machine}; only x64/arm64 is supported")
 
 
+def detect_caddy_asset_suffix() -> str:
+    machine = platform.machine().lower()
+    if machine in {"x86_64", "amd64"}:
+        return "_linux_amd64.tar.gz"
+    if machine in {"aarch64", "arm64"}:
+        return "_linux_arm64.tar.gz"
+    fail(f"unsupported architecture: {machine}; only x64/arm64 is supported")
+
+
 def is_port(value: str) -> bool:
     return value.isdigit() and 1 <= int(value) <= 65535
 
@@ -90,6 +104,14 @@ def build_env():
     return env
 
 
+def build_caddy_env(env):
+    caddy_env = env.copy()
+    caddy_env["HOME"] = str(CWD)
+    caddy_env["XDG_DATA_HOME"] = str(CADDY_DATA_DIR)
+    caddy_env["XDG_CONFIG_HOME"] = str(CADDY_CONFIG_DIR)
+    return caddy_env
+
+
 def validate_ports(env) -> None:
     for name in ["HTTP_FRONT_PORT", "NODE_PORT", "XHTTP_UPSTREAM_PORT", "WS_UPSTREAM_PORT"]:
         if not is_port(env[name]):
@@ -97,36 +119,6 @@ def validate_ports(env) -> None:
 
     if env["HTTP_FRONT_PORT"] == env["NODE_PORT"]:
         fail("HTTP_FRONT_PORT must differ from NODE_PORT")
-
-
-def ensure_haproxy() -> str:
-    haproxy_bin = os.environ.get("HAPROXY_BIN")
-    if haproxy_bin:
-        if not Path(haproxy_bin).exists():
-            fail(f"HAPROXY_BIN does not exist: {haproxy_bin}")
-        return haproxy_bin
-
-    existing = shutil.which("haproxy")
-    if existing:
-        return existing
-
-    log("haproxy not found; attempting system package install")
-    if shutil.which("apk"):
-        run("apk", ["add", "--no-cache", "haproxy"], inherit=True)
-    elif shutil.which("apt-get"):
-        run("apt-get", ["update"], inherit=True)
-        run("apt-get", ["install", "-y", "haproxy"], inherit=True)
-    elif shutil.which("dnf"):
-        run("dnf", ["install", "-y", "haproxy"], inherit=True)
-    elif shutil.which("yum"):
-        run("yum", ["install", "-y", "haproxy"], inherit=True)
-    else:
-        fail("haproxy not found and no supported package manager was detected; install haproxy or set HAPROXY_BIN")
-
-    installed = shutil.which("haproxy")
-    if not installed:
-        fail("haproxy installation finished but haproxy is still not available; install haproxy or set HAPROXY_BIN")
-    return installed
 
 
 def http_get_json(url: str):
@@ -145,6 +137,67 @@ def download_file(url: str, destination: Path) -> None:
     request = urllib.request.Request(url, headers={"User-Agent": "rw-node-go-starter"})
     with urllib.request.urlopen(request, timeout=300) as response, destination.open("wb") as file:
         shutil.copyfileobj(response, file)
+
+
+def resolve_caddy_release():
+    version = os.environ.get("CADDY_VERSION")
+    if version:
+        url = f"https://api.github.com/repos/{CADDY_REPO}/releases/tags/{version}"
+    else:
+        url = f"https://api.github.com/repos/{CADDY_REPO}/releases/latest"
+
+    release = http_get_json(url)
+    if not release.get("tag_name") or not isinstance(release.get("assets"), list):
+        fail("unable to resolve Caddy release assets")
+    return release
+
+
+def find_caddy_download_url(release) -> str:
+    suffix = detect_caddy_asset_suffix()
+    for asset in release["assets"]:
+        name = asset.get("name", "")
+        download_url = asset.get("browser_download_url")
+        if name.startswith("caddy_") and name.endswith(suffix) and download_url:
+            return download_url
+    fail(f"Caddy {release['tag_name']} does not provide a supported Linux asset for {platform.machine()}")
+
+
+def ensure_caddy() -> str:
+    caddy_bin = os.environ.get("CADDY_BIN")
+    if caddy_bin:
+        if not Path(caddy_bin).exists():
+            fail(f"CADDY_BIN does not exist: {caddy_bin}")
+        return caddy_bin
+
+    if CADDY_BIN.exists() and os.access(CADDY_BIN, os.X_OK):
+        log("Caddy already installed; skipping download")
+        return str(CADDY_BIN)
+
+    release = resolve_caddy_release()
+    url = find_caddy_download_url(release)
+    asset_name = url.rsplit("/", 1)[-1]
+    tmp_dir = INSTALL_DIR / "tmp"
+    archive = tmp_dir / asset_name
+    stage_dir = tmp_dir / "caddy-stage"
+
+    log(f"installing Caddy {release['tag_name']}")
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+    stage_dir.mkdir(parents=True, exist_ok=True)
+    BIN_DIR.mkdir(parents=True, exist_ok=True)
+
+    download_file(url, archive)
+    with tarfile.open(archive, "r:gz") as tar:
+        tar.extractall(stage_dir)
+
+    staged_bin = stage_dir / "caddy"
+    if not staged_bin.exists():
+        fail("Caddy release asset is missing caddy")
+
+    shutil.copy2(staged_bin, CADDY_BIN)
+    CADDY_BIN.chmod(0o755)
+    CADDY_VERSION_FILE.write_text(f"{release['tag_name']}\n", encoding="utf-8")
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+    return str(CADDY_BIN)
 
 
 def resolve_rw_node_go_version() -> str:
@@ -205,50 +258,47 @@ def ensure_rw_node_go() -> None:
     shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-def write_haproxy_config(env) -> None:
+def write_caddyfile(env) -> None:
     CONF_DIR.mkdir(parents=True, exist_ok=True)
-    HAPROXY_CONF.write_text(
-        f"""global
-    maxconn 1024
-    nbthread 1
-    log stdout format raw local0 warning
+    CADDYFILE.write_text(
+        f"""{{
+    admin localhost:2019
+    auto_https off
+}}
 
-defaults
-    mode http
-    log global
-    option dontlognull
-    timeout connect 5s
-    timeout client 1h
-    timeout server 1h
-    timeout tunnel 1h
+http://:{env["HTTP_FRONT_PORT"]} {{
+    handle /health {{
+        respond "ok\\n" 200
+    }}
 
-frontend http_front
-    bind *:{env["HTTP_FRONT_PORT"]}
-    acl is_health path -i /health
-    acl is_xh path_beg -i /xh-
-    acl is_ws path_beg -i /ws-
-    acl is_node_api path_beg -i /node/
-    acl is_vision_api path_beg -i /vision/
+    handle /xh-* {{
+        reverse_proxy 127.0.0.1:{env["XHTTP_UPSTREAM_PORT"]}
+    }}
 
-    http-request return status 200 content-type text/plain string "ok\\n" if is_health
-    http-request return status 404 if !is_health !is_xh !is_ws !is_node_api !is_vision_api
-    use_backend xhttp_backend if is_xh
-    use_backend ws_backend if is_ws
-    use_backend node_api_backend if is_node_api
-    use_backend node_api_backend if is_vision_api
+    handle /ws-* {{
+        reverse_proxy 127.0.0.1:{env["WS_UPSTREAM_PORT"]}
+    }}
 
-backend xhttp_backend
-    option http-no-delay
-    server xhttp 127.0.0.1:{env["XHTTP_UPSTREAM_PORT"]}
+    handle /node/* {{
+        reverse_proxy https://127.0.0.1:{env["NODE_PORT"]} {{
+            transport http {{
+                tls_insecure_skip_verify
+            }}
+        }}
+    }}
 
-backend ws_backend
-    option http-server-close
-    timeout tunnel 1h
-    server ws 127.0.0.1:{env["WS_UPSTREAM_PORT"]}
+    handle /vision/* {{
+        reverse_proxy https://127.0.0.1:{env["NODE_PORT"]} {{
+            transport http {{
+                tls_insecure_skip_verify
+            }}
+        }}
+    }}
 
-backend node_api_backend
-    option http-server-close
-    server node_api 127.0.0.1:{env["NODE_PORT"]} ssl verify none
+    handle {{
+        respond 404
+    }}
+}}
 """,
         encoding="utf-8",
     )
@@ -264,11 +314,11 @@ def terminate(code=0):
         return
     shutting_down = True
 
-    for child in [app_process, haproxy_process]:
+    for child in [app_process, caddy_process]:
         if child and child.poll() is None:
             child.terminate()
 
-    for child in [app_process, haproxy_process]:
+    for child in [app_process, caddy_process]:
         if child and child.poll() is None:
             try:
                 child.wait(timeout=5)
@@ -283,28 +333,31 @@ def handle_signal(_signum, _frame):
 
 
 def main() -> None:
-    global haproxy_process, app_process
+    global caddy_process, app_process
 
     ensure_linux()
     env = build_env()
     validate_ports(env)
+    caddy_env = build_caddy_env(env)
 
-    haproxy_bin = ensure_haproxy()
+    caddy_bin = ensure_caddy()
     ensure_rw_node_go()
-    write_haproxy_config(env)
-    run(haproxy_bin, ["-c", "-f", str(HAPROXY_CONF)], env=env)
+    write_caddyfile(env)
+    CADDY_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    CADDY_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    run(caddy_bin, ["validate", "--config", str(CADDYFILE), "--adapter", "caddyfile"], env=caddy_env)
 
-    log(f"starting HAProxy on port {env['HTTP_FRONT_PORT']}")
-    haproxy_process = spawn_managed(haproxy_bin, ["-W", "-db", "-f", str(HAPROXY_CONF)], env)
+    log(f"starting Caddy on port {env['HTTP_FRONT_PORT']}")
+    caddy_process = spawn_managed(caddy_bin, ["run", "--config", str(CADDYFILE), "--adapter", "caddyfile"], caddy_env)
 
     log("starting rw-node-go")
     app_process = spawn_managed(str(APP_BIN), [], env)
 
     while True:
-        haproxy_status = haproxy_process.poll()
+        caddy_status = caddy_process.poll()
         app_status = app_process.poll()
-        if haproxy_status is not None:
-            log(f"haproxy exited with {haproxy_status}")
+        if caddy_status is not None:
+            log(f"caddy exited with {caddy_status}")
             terminate(1)
         if app_status is not None:
             log(f"rw-node-go exited with {app_status}")
