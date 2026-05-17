@@ -206,24 +206,19 @@ resolve_caddy_release_json() {
 find_caddy_download_url() {
   local release_json="$1"
   local regex
+  local url name
   regex="$(detect_caddy_asset_regex)"
 
-  awk -v regex="$regex" '
-    /"name"[[:space:]]*:/ {
-      name = $0
-      sub(/^.*"name"[[:space:]]*:[[:space:]]*"/, "", name)
-      sub(/".*$/, "", name)
-    }
-    /"browser_download_url"[[:space:]]*:/ {
-      url = $0
-      sub(/^.*"browser_download_url"[[:space:]]*:[[:space:]]*"/, "", url)
-      sub(/".*$/, "", url)
-      if (name ~ regex) {
-        print url
-        exit
-      }
-    }
-  ' <<< "$release_json"
+  while IFS= read -r url; do
+    name="${url##*/}"
+    if [[ "$name" =~ $regex ]]; then
+      printf '%s' "$url"
+      return 0
+    fi
+  done < <(
+    grep -oE '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]+"' <<< "$release_json" \
+      | sed -E 's/^"browser_download_url"[[:space:]]*:[[:space:]]*"([^"]+)"/\1/'
+  )
 }
 
 ensure_caddy() {
