@@ -46,8 +46,8 @@ COPY --from=build /opt/app/node_modules ./node_modules
 COPY --from=build /opt/app/package*.json ./
 
 RUN set -ex; \
-    apk add --no-cache bash curl haproxy tar unzip; \
-    mkdir -p /usr/local/share/xray; \
+    apk add --no-cache bash caddy curl tar unzip; \
+    mkdir -p /usr/local/share/xray /opt/rw-node/default-www; \
     if [ "${TARGETARCH}" = "arm64" ]; then \
         SUPERVISORD_ARCH="ARM64"; \
         XRAY_ARCH="arm64-v8a"; \
@@ -64,6 +64,15 @@ RUN set -ex; \
     mv /tmp/xray/xray /usr/local/bin/xray; \
     chmod +x /usr/local/bin/xray; \
     mv /tmp/xray/geo*.dat /usr/local/share/xray/ 2>/dev/null || true; \
+    if curl -fsSL --retry 3 --connect-timeout 10 --max-time 60 "https://github.com/AYJCSGM/mikutap/archive/master.zip" -o /tmp/default-www.zip \
+        && unzip -q /tmp/default-www.zip -d /tmp/default-www \
+        && index_file="$(find /tmp/default-www -mindepth 1 -maxdepth 4 -type f -iname index.html | sort | head -n 1)" \
+        && [ -n "${index_file}" ]; then \
+        site_dir="$(dirname "${index_file}")"; \
+        cp -a "${site_dir}/." /opt/rw-node/default-www/; \
+    else \
+        printf '%s\n' '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Welcome</title></head><body><main><h1>Welcome</h1><p>The service is running.</p></main></body></html>' > /opt/rw-node/default-www/index.html; \
+    fi; \
     ln -sf /usr/local/bin/xray /usr/local/bin/rw-core; \
     printf '#!/bin/bash\nset -euo pipefail\nWORK_DIR="${RW_NODE_DIR:-/opt/rw-node}"\ntail -n +1 -f "${WORK_DIR}/logs/xray.out.log"\n' > /usr/local/bin/xlogs; \
     printf '#!/bin/bash\nset -euo pipefail\nWORK_DIR="${RW_NODE_DIR:-/opt/rw-node}"\ntail -n +1 -f "${WORK_DIR}/logs/xray.err.log"\n' > /usr/local/bin/xerrors; \
@@ -71,7 +80,7 @@ RUN set -ex; \
     rm -rf /tmp/* /var/cache/apk/*
 
 COPY docker-entrypoint.sh /usr/local/bin/
-COPY paas-haproxy-front.sh docker-entrypoint.paas.sh /usr/local/bin/
+COPY paas-caddy-front.sh docker-entrypoint.paas.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.paas.sh
 
 ENV NODE_ENV=production

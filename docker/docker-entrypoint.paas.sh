@@ -12,10 +12,12 @@ if [[ ! -f "${WORK_DIR}/dist/src/main" && ! -f "${WORK_DIR}/dist/src/main.js" &&
 fi
 
 CONF_DIR="${WORK_DIR}/conf"
-HAPROXY_CONF_DIR="${CONF_DIR}/haproxy"
-HAPROXY_BIN="${HAPROXY_BIN:-$(command -v haproxy 2>/dev/null || true)}"
-HAPROXY_FRONT_LIB="/usr/local/bin/paas-haproxy-front.sh"
-HAPROXY_LOG_PREFIX="[PaaS]"
+CADDY_CONF_DIR="${CONF_DIR}/caddy"
+CADDY_SITE_DIR="${CADDY_SITE_DIR:-${WORK_DIR}/www}"
+CADDY_DEFAULT_SITE_DIR="${CADDY_DEFAULT_SITE_DIR:-${APP_DIR}/default-www}"
+CADDY_BIN="${CADDY_BIN:-$(command -v caddy 2>/dev/null || true)}"
+CADDY_FRONT_LIB="/usr/local/bin/paas-caddy-front.sh"
+CADDY_LOG_PREFIX="[PaaS]"
 RW_NODE_ENTRYPOINT="/usr/local/bin/docker-entrypoint.sh"
 
 NODE_PORT="${NODE_PORT:-2222}"
@@ -23,6 +25,7 @@ HTTP_FRONT_ENABLED="${HTTP_FRONT_ENABLED:-true}"
 HTTP_FRONT_PORT="${HTTP_FRONT_PORT:-${PORT:-3000}}"
 XHTTP_UPSTREAM_PORT="${XHTTP_UPSTREAM_PORT:-8080}"
 WS_UPSTREAM_PORT="${WS_UPSTREAM_PORT:-8880}"
+CADDY_INDEX_PAGE="${CADDY_INDEX_PAGE:-${CADDYIndexPage:-mikutap}}"
 
 is_port() {
     [[ "$1" =~ ^[0-9]+$ ]] && (( "$1" >= 1 && "$1" <= 65535 ))
@@ -49,7 +52,7 @@ wait_for_port() {
 
 app_pid=""
 health_pid=""
-haproxy_pid=""
+caddy_pid=""
 
 terminate() {
     trap - INT TERM
@@ -62,8 +65,8 @@ terminate() {
         kill "${health_pid}" 2>/dev/null || true
     fi
 
-    if [[ -n "${haproxy_pid}" ]] && kill -0 "${haproxy_pid}" 2>/dev/null; then
-        kill "${haproxy_pid}" 2>/dev/null || true
+    if [[ -n "${caddy_pid}" ]] && kill -0 "${caddy_pid}" 2>/dev/null; then
+        kill "${caddy_pid}" 2>/dev/null || true
     fi
 
     wait 2>/dev/null || true
@@ -96,7 +99,7 @@ http.createServer((req, res) => {
     health_pid=$!
 }
 
-source "${HAPROXY_FRONT_LIB}"
+source "${CADDY_FRONT_LIB}"
 
 trap terminate INT TERM
 
@@ -106,7 +109,7 @@ if ! is_port "${NODE_PORT}"; then
 fi
 
 if [[ "${HTTP_FRONT_ENABLED}" == "true" ]]; then
-    start_haproxy_front
+    start_caddy_front
 elif [[ "${HTTP_FRONT_ENABLED}" == "false" ]]; then
     start_health_server
 else
@@ -117,9 +120,9 @@ fi
 "${RW_NODE_ENTRYPOINT}" "$@" &
 app_pid=$!
 
-if [[ -n "${haproxy_pid}" ]]; then
+if [[ -n "${caddy_pid}" ]]; then
     set +e
-    wait -n "${app_pid}" "${haproxy_pid}"
+    wait -n "${app_pid}" "${caddy_pid}"
     status=$?
     set -e
 elif [[ -n "${health_pid}" ]]; then
