@@ -37,10 +37,6 @@ jobs:
             dockerfile: docker/Dockerfile.official
             suffix: "-official"
             description: "Official Compatible (Python Supervisord)"
-          - variant: paas
-            dockerfile: docker/Dockerfile.paas
-            suffix: "-paas"
-            description: "PaaS HTTPS Direct"
           - variant: go-paas
             dockerfile: docker/Dockerfile.go-paas
             suffix: "-go-paas"
@@ -154,6 +150,4 @@ jobs:
             echo "| \`ghcr.io/${{ github.repository }}:latest-lite\` | Lightweight (Go Supervisord) |" >> $GITHUB_STEP_SUMMARY
             echo "| \`ghcr.io/${{ github.repository }}:${{ inputs.version }}-official\` | Official Compatible (Python Supervisord) |" >> $GITHUB_STEP_SUMMARY
             echo "| \`ghcr.io/${{ github.repository }}:latest-official\` | Official Compatible (Python Supervisord) |" >> $GITHUB_STEP_SUMMARY
-            echo "| \`ghcr.io/${{ github.repository }}:${{ inputs.version }}-paas\` | PaaS HTTPS Direct |" >> $GITHUB_STEP_SUMMARY
-            echo "| \`ghcr.io/${{ github.repository }}:latest-paas\` | PaaS HTTPS Direct |" >> $GITHUB_STEP_SUMMARY
           fi

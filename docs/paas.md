@@ -2,16 +2,10 @@
 
 PaaS 镜像适合 Render、Koyeb、Railway、Fly.io 等只提供 HTTP/HTTPS 回源端口的平台。它在容器内启动 Caddy HTTP 前置，把平台 HTTPS 域名收到的请求按路径转发到本机不同服务，并把未命中特定路径的请求伪装成静态页面。
 
-推荐镜像（Go 实现）：
+推荐镜像：
 
 ```text
 ghcr.io/x-dora/rw-node:latest
-```
-
-JS 实现 PaaS 镜像：
-
-```text
-ghcr.io/x-dora/rw-node:latest-paas
 ```
 
 ## 推荐链路
@@ -42,18 +36,6 @@ NODE_TLS_CLIENT_AUTH=none
 ```bash
 docker run -d \
   --name rw-node-paas \
-  -e SECRET_KEY=YOUR_SECRET_KEY \
-  -e NODE_PORT=2222 \
-  -e NODE_TLS_CLIENT_AUTH=none \
-  -e XTLS_API_PORT=61000 \
-  ghcr.io/x-dora/rw-node:latest-paas
-```
-
-Go 实现 PaaS 示例：
-
-```bash
-docker run -d \
-  --name rw-node-go-paas \
   -e SECRET_KEY=YOUR_SECRET_KEY \
   -e NODE_PORT=2222 \
   -e NODE_TLS_CLIENT_AUTH=none \
@@ -107,7 +89,7 @@ docker run -d \
   -e NODE_PORT=2222 \
   -e NODE_TLS_CLIENT_AUTH=none \
   -e CADDY_INDEX_PAGE=webgl-fluid-simulation \
-  ghcr.io/x-dora/rw-node:latest-paas
+  ghcr.io/x-dora/rw-node:latest
 ```
 
 常用内置关键字：
