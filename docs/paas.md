@@ -2,16 +2,16 @@
 
 PaaS 镜像适合 Render、Koyeb、Railway、Fly.io 等只提供 HTTP/HTTPS 回源端口的平台。它在容器内启动 Caddy HTTP 前置，把平台 HTTPS 域名收到的请求按路径转发到本机不同服务，并把未命中特定路径的请求伪装成静态页面。
 
-推荐镜像：
+推荐镜像（Go 实现）：
+
+```text
+ghcr.io/x-dora/rw-node:latest
+```
+
+JS 实现 PaaS 镜像：
 
 ```text
 ghcr.io/x-dora/rw-node:latest-paas
-```
-
-非官方 Go 实现镜像：
-
-```text
-ghcr.io/x-dora/rw-node:latest-go-paas
 ```
 
 ## 推荐链路
@@ -58,7 +58,7 @@ docker run -d \
   -e NODE_PORT=2222 \
   -e NODE_TLS_CLIENT_AUTH=none \
   -e INTERNAL_REST_PORT=61001 \
-  ghcr.io/x-dora/rw-node:latest-go-paas
+  ghcr.io/x-dora/rw-node:latest
 ```
 
 Remnawave Panel 中节点地址填写 PaaS 提供的 HTTPS 域名，例如：
