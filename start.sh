@@ -7,7 +7,7 @@ CLOUDFLARED_REPO="cloudflare/cloudflared"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 CWD="$SCRIPT_DIR"
-INSTALL_DIR="$CWD/.rw-node-go"
+INSTALL_DIR="$CWD/.rw-node"
 BIN_DIR="$INSTALL_DIR/bin"
 ASSET_DIR="$INSTALL_DIR/share/xray"
 CONF_DIR="$INSTALL_DIR/conf/caddy"

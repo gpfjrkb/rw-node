@@ -63,7 +63,7 @@ KEY='value'
 `rw-node-go`、Caddy 和可选的 `cloudflared` 都安装到仓库根目录下：
 
 ```text
-.rw-node-go/
+.rw-node/
   bin/caddy
   bin/cloudflared
   bin/rw-node-go
@@ -82,7 +82,7 @@ KEY='value'
 
 ## Caddy
 
-启动入口会检查 `.rw-node-go/bin/caddy`。如果本地 Caddy 不存在，则通过 Caddy 官方 download API 下载带 `caddy-l4`（layer4 插件）的预编译二进制，复制到 `.rw-node-go/bin/caddy`，并设置权限为 `755`。
+启动入口会检查 `.rw-node/bin/caddy`。如果本地 Caddy 不存在，则通过 Caddy 官方 download API 下载带 `caddy-l4`（layer4 插件）的预编译二进制，复制到 `.rw-node/bin/caddy`，并设置权限为 `755`。
 
 下载地址格式：
 
@@ -94,8 +94,8 @@ Caddy 子进程会使用适合 rootless PaaS 的目录：
 
 ```text
 HOME=<仓库根目录>
-XDG_DATA_HOME=<仓库根目录>/.rw-node-go/caddy/data
-XDG_CONFIG_HOME=<仓库根目录>/.rw-node-go/caddy/config
+XDG_DATA_HOME=<仓库根目录>/.rw-node/caddy/data
+XDG_CONFIG_HOME=<仓库根目录>/.rw-node/caddy/config
 ```
 
 生成的 `Caddyfile` 会关闭 Caddy admin 端点和配置持久化，避免在 PaaS 运行时额外打开本地管理端口或写入 autosave 配置：
@@ -165,7 +165,7 @@ NODE_TLS_CLIENT_AUTH=none
 INTERNAL_REST_PORT=61001
 REQUIRE_SECRET_KEY=true
 RW_NODE_DIR=<仓库根目录>
-XRAY_LOCATION_ASSET=<仓库根目录>/.rw-node-go/share/xray
+XRAY_LOCATION_ASSET=<仓库根目录>/.rw-node/share/xray
 HTTP_FRONT_PORT=${PORT:-3000}
 XHTTP_UPSTREAM_PORT=8080
 WS_UPSTREAM_PORT=8880
@@ -239,9 +239,9 @@ http://localhost:${HTTP_FRONT_PORT}
 3. 确保 Caddy 已安装。
 4. 确保 `rw-node-go` 已安装。
 5. 当 `ARGO_TOKEN` 非空时，确保 `cloudflared` 已安装。
-6. 生成 `.rw-node-go/conf/caddy/Caddyfile`。
-7. 使用 `caddy validate --config .rw-node-go/conf/caddy/Caddyfile --adapter caddyfile` 校验配置；校验成功时只输出一行启动器日志，校验失败时输出 Caddy 原始错误。
-8. 使用 `caddy run --config .rw-node-go/conf/caddy/Caddyfile --adapter caddyfile` 启动 Caddy。layer4 在 `HTTP_FRONT_PORT` 上同时接收 TLS 和 HTTP 连接。
+6. 生成 `.rw-node/conf/caddy/Caddyfile`。
+7. 使用 `caddy validate --config .rw-node/conf/caddy/Caddyfile --adapter caddyfile` 校验配置；校验成功时只输出一行启动器日志，校验失败时输出 Caddy 原始错误。
+8. 使用 `caddy run --config .rw-node/conf/caddy/Caddyfile --adapter caddyfile` 启动 Caddy。layer4 在 `HTTP_FRONT_PORT` 上同时接收 TLS 和 HTTP 连接。
 9. 启动 `rw-node-go`。
 10. 当 `ARGO_TOKEN` 非空时，启动 `cloudflared tunnel run --token "$ARGO_TOKEN"`，并使用 HTTP/2、Cloudflare DNS resolver 和自动 edge IP 版本连接 Cloudflare。
 11. 当 Caddy 或 `rw-node-go` 提前退出，或启动入口收到 `SIGINT` / `SIGTERM` 时，终止所有子进程。

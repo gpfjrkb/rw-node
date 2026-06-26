@@ -1,4 +1,4 @@
-.rw-node-go/
+.rw-node/
 .env
 .venv/
 __pycache__/
