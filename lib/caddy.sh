@@ -529,6 +529,8 @@ _start_reality_watcher_jq() {
             write_caddy_config "${config_path}" "" ""
         fi
 
+        "${CADDY_BIN}" fmt --overwrite "${config_path}" >/dev/null 2>&1 || true
+
         if "${CADDY_BIN}" reload --config "${config_path}" --adapter caddyfile --address "unix/${CADDY_ADMIN_SOCK}" 2>/dev/null; then
             log "Caddy reloaded with updated REALITY split config"
         else
@@ -545,6 +547,8 @@ start_reality_watcher() {
         log "WARN: REALITY dynamic split disabled (no jq, node, or python3 available)"
         return 0
     fi
+
+    export CADDY_ADMIN_SOCK CADDY_BIN CADDY_HTTP_PORT CADDY_SITE_DIR LOG_PREFIX
 
     case "${backend}" in
         jq)
@@ -584,6 +588,7 @@ start_caddy_front() {
 
     local config_path="${CADDY_CONF_DIR}/Caddyfile"
     write_caddy_config "${config_path}"
+    "${CADDY_BIN}" fmt --overwrite "${config_path}" >/dev/null 2>&1 || true
 
     local validate_output
     validate_output="$(mktemp)"

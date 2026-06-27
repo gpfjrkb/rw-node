@@ -157,6 +157,18 @@ def hash_string(s: str) -> str:
     return hashlib.md5(s.encode()).hexdigest()
 
 
+def caddy_fmt(config_path: str) -> None:
+    try:
+        subprocess.run(
+            [CADDY_BIN, "fmt", "--overwrite", config_path],
+            capture_output=True,
+            timeout=5,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+
+
 def caddy_reload(config_path: str) -> bool:
     try:
         subprocess.run(
@@ -230,6 +242,8 @@ def main() -> int:
 
         with open(config_path, "w") as f:
             f.write(generate_caddy_config(reality_snis, reality_port))
+
+        caddy_fmt(config_path)
 
         if caddy_reload(config_path):
             log("Caddy reloaded with updated REALITY split config")
