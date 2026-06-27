@@ -332,19 +332,32 @@ setup_caddy_static_site() {
     publish_static_site "${staging_dir}" "${final_site_dir}"
 }
 
-write_caddy_config() {
-    local config_path="$1"
+CADDY_ADMIN_SOCK="/tmp/caddy-admin.sock"
 
-    cat > "${config_path}" << EOF
-{
-    admin off
-    auto_https off
-    persist_config off
+write_caddy_layer4_block() {
+    local reality_snis="${1:-}"
+    local reality_port="${2:-}"
 
-    log {
-        level WARN
+    if [[ -n "${reality_snis}" && -n "${reality_port}" ]]; then
+        cat << LAYER4_EOF
+    layer4 {
+        :${HTTP_FRONT_PORT} {
+            @reality tls sni ${reality_snis}
+            route @reality {
+                proxy 127.0.0.1:${reality_port}
+            }
+            @tls tls
+            route @tls {
+                proxy 127.0.0.1:${NODE_PORT}
+            }
+            route {
+                proxy 127.0.0.1:${CADDY_HTTP_PORT}
+            }
+        }
     }
-
+LAYER4_EOF
+    else
+        cat << LAYER4_EOF
     layer4 {
         :${HTTP_FRONT_PORT} {
             @tls tls
@@ -356,6 +369,31 @@ write_caddy_config() {
             }
         }
     }
+LAYER4_EOF
+    fi
+}
+
+write_caddy_config() {
+    local config_path="$1"
+    local reality_snis="${2:-}"
+    local reality_port="${3:-}"
+    local admin_line="admin off"
+
+    if [[ "${REALITY_SPLIT_ENABLED:-true}" == "true" ]]; then
+        admin_line="admin unix/${CADDY_ADMIN_SOCK}"
+    fi
+
+    cat > "${config_path}" << EOF
+{
+    ${admin_line}
+    auto_https off
+    persist_config off
+
+    log {
+        level WARN
+    }
+
+$(write_caddy_layer4_block "${reality_snis}" "${reality_port}")
 
     servers :${CADDY_HTTP_PORT} {
         protocols h1
@@ -403,6 +441,86 @@ http://:${CADDY_HTTP_PORT} {
     }
 }
 EOF
+}
+
+extract_reality_config() {
+    local config_json="$1"
+
+    echo "${config_json}" | jq -r '
+        [.inbounds // [] | .[] |
+         select(.streamSettings.security == "reality") |
+         {
+           port: .port,
+           serverNames: (.streamSettings.realitySettings.serverNames // [])
+         }
+        ] |
+        if length == 0 then empty
+        else
+          {
+            port: (map(.port) | first),
+            serverNames: [map(.serverNames[]) | unique | .[]]
+          } |
+          "\(.port)\n\(.serverNames | join(" "))"
+        end
+    ' 2>/dev/null || true
+}
+
+start_reality_watcher() {
+    local config_path="$1"
+    local log_prefix="${CADDY_LOG_PREFIX:-[PaaS]}"
+    local interval="${REALITY_SPLIT_INTERVAL:-15}"
+    local internal_url="http://127.0.0.1:${INTERNAL_REST_PORT}/internal/get-config"
+    local prev_hash=""
+
+    for _ in $(seq 1 120); do
+        if (echo >"/dev/tcp/127.0.0.1/${INTERNAL_REST_PORT}") >/dev/null 2>&1; then
+            break
+        fi
+        sleep 1
+    done
+
+    while true; do
+        sleep "${interval}"
+
+        local config_json
+        config_json="$(curl -sS --max-time 5 "${internal_url}" 2>/dev/null || true)"
+        if [[ -z "${config_json}" || "${config_json}" == "{}" ]]; then
+            continue
+        fi
+
+        local reality_info
+        reality_info="$(extract_reality_config "${config_json}")"
+        local reality_port=""
+        local reality_snis=""
+
+        if [[ -n "${reality_info}" ]]; then
+            reality_port="$(echo "${reality_info}" | head -1)"
+            reality_snis="$(echo "${reality_info}" | tail -1)"
+        fi
+
+        local current_hash
+        current_hash="$(printf '%s\n%s' "${reality_port}" "${reality_snis}" | md5sum | cut -d' ' -f1)"
+
+        if [[ "${current_hash}" == "${prev_hash}" ]]; then
+            continue
+        fi
+
+        prev_hash="${current_hash}"
+
+        if [[ -n "${reality_snis}" && -n "${reality_port}" ]]; then
+            echo "${log_prefix} REALITY split detected: snis=[${reality_snis}] port=${reality_port}"
+            write_caddy_config "${config_path}" "${reality_snis}" "${reality_port}"
+        else
+            echo "${log_prefix} REALITY split cleared, reverting to default TLS routing"
+            write_caddy_config "${config_path}" "" ""
+        fi
+
+        if "${CADDY_BIN}" reload --config "${config_path}" --adapter caddyfile --address "unix/${CADDY_ADMIN_SOCK}" 2>/dev/null; then
+            echo "${log_prefix} Caddy reloaded with updated REALITY split config"
+        else
+            echo "${log_prefix} WARN: Caddy reload failed, will retry next cycle"
+        fi
+    done
 }
 
 start_caddy_front() {

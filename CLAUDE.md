@@ -52,6 +52,8 @@ PaaS 版额外变量：
 - `CADDY_INDEX_PAGE` — Caddy 静态伪装页面资源（默认 `mikutap`，使用镜像内置默认页面，兼容 `CADDYIndexPage` 别名）
 - `CADDY_DEFAULT_SITE_DIR` — 镜像内置默认静态页面目录（默认 `/opt/rw-node/default-www`）
 - `RW_NODE_APP_DIR` — PaaS 镜像内应用文件目录（默认 `/opt/rw-node`，通常不要修改）
+- `REALITY_SPLIT_ENABLED` — 是否启用 REALITY TLS 动态分流（默认 `true`）；后台 watcher 从 rw-node-go 内部 API 提取 REALITY serverNames，自动重载 Caddy 实现 SNI 分流
+- `REALITY_SPLIT_INTERVAL` — REALITY 分流 watcher 轮询间隔（秒，默认 `15`）
 
 ## 注意事项
 
@@ -60,6 +62,7 @@ PaaS 版额外变量：
 - Docker 镜像构建使用多阶段构建：amd64 平台构建 JS 代码，最终镜像跨平台运行
 - PaaS 场景当前最推荐做法：在 Panel 端数据库 `keygen.ca_cert` 字段追加 PaaS HTTPS 域名证书链对应的一些公共证书 Root CA，节点设置 `NODE_TLS_CLIENT_AUTH=none`，Remnawave Panel 节点地址直连 PaaS 提供的 HTTPS 域名；`config/certs/free-provider-root-ca-bundle.pem` 可作为常见 Root CA 参考包
 - PaaS 版默认启动 Caddy Layer 4 前置，在单端口上复用 TLS 和 HTTP 流量：TLS 连接（ClientHello）直接 TCP 代理到 `127.0.0.1:NODE_PORT`（TLS 直通，不终止）；非 TLS 连接代理到内部 `CADDY_HTTP_PORT`（= `HTTP_FRONT_PORT + 1`，自动计算）做路径路由。HTTP 路径路由规则：`/xh-*` → `127.0.0.1:8080`，`/ws-*` → `127.0.0.1:8880`（Caddy 到 Xray 一律使用明文 HTTP）；`/node/*` 和 `/vision/*` 转发到 `127.0.0.1:NODE_PORT` 的 HTTPS API（`tls_insecure_skip_verify`）；其他路径返回静态伪装页面
+- PaaS 版默认启用 REALITY TLS 动态分流（`REALITY_SPLIT_ENABLED=true`）：后台 watcher 轮询 rw-node-go 内部 API（`/internal/get-config`）提取 REALITY inbound 的 `serverNames` 和端口，自动生成 Caddy L4 SNI 分流规则并热重载。REALITY SNI 流量直通到 Xray 端口，其余 TLS 流量到 rw-node HTTPS API
 - `XTLS_API_PORT` 是内部端口，不应通过 Docker、VPS 防火墙或 PaaS 入站公开
 - 不要把 PaaS 持久化卷挂载到 `/opt/rw-node` 或把 `RW_NODE_DIR` 指向空目录，否则会覆盖/绕开镜像内 `dist/` 和 `node_modules/`，导致入口脚本报 `application entrypoint is missing`
 - 上游版本更新由 Renovate 自动提 PR，合并后自动触发完整构建和发布流程

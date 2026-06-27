@@ -137,6 +137,27 @@ docker run -d \
 | `CADDY_SITE_DIR` | `${RW_NODE_DIR}/www` | Caddy 静态伪装页面生成目录，启动时会重建；自定义非空目录需要 `.rw-node-caddy-site-dir` marker |
 | `CADDY_DEFAULT_SITE_DIR` | `/opt/rw-node/default-www` | 镜像内置默认静态页面目录，通常不需要手动设置 |
 | `RW_NODE_APP_DIR` | `/opt/rw-node` | PaaS 镜像内应用文件目录，通常不要修改 |
+| `REALITY_SPLIT_ENABLED` | `true` | 是否启用 REALITY TLS 动态分流，详见下方说明 |
+| `REALITY_SPLIT_INTERVAL` | `15` | REALITY 分流 watcher 轮询间隔（秒） |
+
+## REALITY TLS 动态分流
+
+Go PaaS 镜像默认启用 REALITY TLS 动态分流（`REALITY_SPLIT_ENABLED=true`）。启用后，后台 watcher 会轮询 rw-node-go 内部 API，自动提取 Panel 下发的 REALITY inbound 配置（`serverNames` 和端口），生成 Caddy Layer 4 SNI 分流规则并热重载 Caddy。
+
+分流效果：
+
+```text
+PaaS 入站端口
+  ├─ TLS + SNI 匹配 REALITY 伪装域名 → 127.0.0.1:REALITY_PORT（TCP 直通）
+  ├─ TLS + 其他 SNI（Panel 连接等）   → 127.0.0.1:NODE_PORT
+  └─ 非 TLS                           → Caddy HTTP 路径路由
+```
+
+Panel 连接使用 PaaS HTTPS 域名作为 SNI，REALITY 客户端使用伪装域名（如 `www.microsoft.com`）作为 SNI，两者天然不同，Caddy Layer 4 可以按 SNI 区分。
+
+REALITY 配置由 Panel 动态下发，watcher 会在每次轮询时检查配置变化，仅在 `serverNames` 或端口改变时重载 Caddy。Panel 未下发配置或没有 REALITY inbound 时，保持默认行为（所有 TLS → NODE_PORT）。
+
+设为 `REALITY_SPLIT_ENABLED=false` 可完全禁用此功能。
 
 ## xhttp / WebSocket 路径
 

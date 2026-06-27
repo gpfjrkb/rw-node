@@ -23,6 +23,8 @@ HTTP_FRONT_PORT="${HTTP_FRONT_PORT:-${PORT:-3000}}"
 XHTTP_UPSTREAM_PORT="${XHTTP_UPSTREAM_PORT:-8080}"
 WS_UPSTREAM_PORT="${WS_UPSTREAM_PORT:-8880}"
 CADDY_INDEX_PAGE="${CADDY_INDEX_PAGE:-${CADDYIndexPage:-mikutap}}"
+REALITY_SPLIT_ENABLED="${REALITY_SPLIT_ENABLED:-true}"
+REALITY_SPLIT_INTERVAL="${REALITY_SPLIT_INTERVAL:-15}"
 
 is_port() {
     [[ "$1" =~ ^[0-9]+$ ]] && (( "$1" >= 1 && "$1" <= 65535 ))
@@ -50,9 +52,14 @@ wait_for_port() {
 app_pid=""
 health_pid=""
 caddy_pid=""
+watcher_pid=""
 
 terminate() {
     trap - INT TERM
+
+    if [[ -n "${watcher_pid}" ]] && kill -0 "${watcher_pid}" 2>/dev/null; then
+        kill "${watcher_pid}" 2>/dev/null || true
+    fi
 
     if [[ -n "${app_pid}" ]] && kill -0 "${app_pid}" 2>/dev/null; then
         kill "${app_pid}" 2>/dev/null || true
@@ -119,6 +126,11 @@ fi
 cd "${WORK_DIR}"
 "${APP_BIN}" &
 app_pid=$!
+
+if [[ "${HTTP_FRONT_ENABLED}" == "true" && "${REALITY_SPLIT_ENABLED}" == "true" ]]; then
+    start_reality_watcher "${CONF_DIR}/caddy/Caddyfile" &
+    watcher_pid=$!
+fi
 
 if [[ -n "${caddy_pid}" ]]; then
     set +e
