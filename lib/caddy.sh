@@ -21,7 +21,7 @@ resolve_caddy_index_page() {
             if [[ -f "${CADDY_DEFAULT_SITE_DIR:-}/index.html" ]]; then
                 echo "${CADDY_DEFAULT_SITE_DIR}"
             else
-                echo "builtin:fallback"
+                echo "${DEFAULT_CADDY_INDEX_PAGE_URL}"
             fi
             ;;
         "mikutap-remote"|"mikutap-url")
