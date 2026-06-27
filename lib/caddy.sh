@@ -493,8 +493,13 @@ _start_reality_watcher_jq() {
         sleep 1
     done
 
+    local first_run=1
     while true; do
-        sleep "${interval}"
+        if (( first_run )); then
+            first_run=0
+        else
+            sleep "${interval}"
+        fi
 
         local config_json
         config_json="$(curl -sS --max-time 5 "${internal_url}" 2>/dev/null || true)"

@@ -214,9 +214,13 @@ def main() -> int:
 
     prev_hash = ""
     internal_url = f"http://127.0.0.1:{INTERNAL_REST_PORT}/internal/get-config"
+    first_run = True
 
     while True:
-        time.sleep(REALITY_SPLIT_INTERVAL)
+        if first_run:
+            first_run = False
+        else:
+            time.sleep(REALITY_SPLIT_INTERVAL)
 
         try:
             raw = http_get(internal_url)
