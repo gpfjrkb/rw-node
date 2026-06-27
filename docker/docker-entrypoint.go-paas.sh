@@ -9,8 +9,14 @@ CADDY_CONF_DIR="${CONF_DIR}/caddy"
 CADDY_SITE_DIR="${CADDY_SITE_DIR:-${WORK_DIR}/www}"
 CADDY_DEFAULT_SITE_DIR="${CADDY_DEFAULT_SITE_DIR:-/opt/rw-node/default-www}"
 CADDY_BIN="${CADDY_BIN:-$(command -v caddy 2>/dev/null || true)}"
-CADDY_FRONT_LIB="/usr/local/bin/paas-caddy-front.sh"
-CADDY_LOG_PREFIX="[Go PaaS]"
+CADDY_ADMIN_SOCK="/tmp/caddy-admin.sock"
+LOG_PREFIX="[Go PaaS]"
+
+RW_NODE_LIB_DIR="${RW_NODE_LIB_DIR:-/usr/local/lib/rw-node}"
+# shellcheck source=../lib/core.sh
+source "${RW_NODE_LIB_DIR}/core.sh"
+# shellcheck source=../lib/caddy.sh
+source "${RW_NODE_LIB_DIR}/caddy.sh"
 
 NODE_PORT="${NODE_PORT:-2222}"
 NODE_TLS_CLIENT_AUTH="${NODE_TLS_CLIENT_AUTH:-mtls}"
@@ -20,34 +26,12 @@ RW_NODE_DIR="${WORK_DIR}"
 XRAY_LOCATION_ASSET="${XRAY_LOCATION_ASSET:-/usr/local/share/xray}"
 HTTP_FRONT_ENABLED="${HTTP_FRONT_ENABLED:-true}"
 HTTP_FRONT_PORT="${HTTP_FRONT_PORT:-${PORT:-3000}}"
+CADDY_HTTP_PORT=$((HTTP_FRONT_PORT + 1))
 XHTTP_UPSTREAM_PORT="${XHTTP_UPSTREAM_PORT:-8080}"
 WS_UPSTREAM_PORT="${WS_UPSTREAM_PORT:-8880}"
 CADDY_INDEX_PAGE="${CADDY_INDEX_PAGE:-${CADDYIndexPage:-mikutap}}"
 REALITY_SPLIT_ENABLED="${REALITY_SPLIT_ENABLED:-true}"
 REALITY_SPLIT_INTERVAL="${REALITY_SPLIT_INTERVAL:-15}"
-
-is_port() {
-    [[ "$1" =~ ^[0-9]+$ ]] && (( "$1" >= 1 && "$1" <= 65535 ))
-}
-
-wait_for_port() {
-    local port="$1"
-    local pid="${2:-}"
-
-    for _ in $(seq 1 50); do
-        if [[ -n "${pid}" ]] && ! kill -0 "${pid}" 2>/dev/null; then
-            return 1
-        fi
-
-        if (echo >"/dev/tcp/127.0.0.1/${port}") >/dev/null 2>&1; then
-            return 0
-        fi
-
-        sleep 0.1
-    done
-
-    return 1
-}
 
 app_pid=""
 health_pid=""
@@ -82,35 +66,30 @@ start_health_server() {
     fi
 
     if ! is_port "${PORT}"; then
-        echo "[Go PaaS] ERROR: PORT must be a valid TCP port"
-        exit 1
+        fail "PORT must be a valid TCP port"
     fi
 
     if [[ "${PORT}" == "${NODE_PORT}" ]]; then
-        echo "[Go PaaS] PORT equals NODE_PORT; skipping auxiliary HTTP health server"
+        log "PORT equals NODE_PORT; skipping auxiliary HTTP health server"
         return 0
     fi
 
-    echo "[Go PaaS] Starting auxiliary HTTP health server on port ${PORT}"
+    log "Starting auxiliary HTTP health server on port ${PORT}"
     printf 'ok\n' > /tmp/index.html
     busybox httpd -f -p "0.0.0.0:${PORT}" -h /tmp &
     health_pid=$!
 }
 
-source "${CADDY_FRONT_LIB}"
-
 trap terminate INT TERM
 
 if ! is_port "${NODE_PORT}"; then
-    echo "[Go PaaS] ERROR: NODE_PORT must be a valid TCP port"
-    exit 1
+    fail "NODE_PORT must be a valid TCP port"
 fi
 
 export NODE_PORT NODE_TLS_CLIENT_AUTH INTERNAL_REST_PORT REQUIRE_SECRET_KEY RW_NODE_DIR XRAY_LOCATION_ASSET
 
 if [[ ! -x "${APP_BIN}" ]]; then
-    echo "[Go PaaS] ERROR: rw-node-go binary not found"
-    exit 1
+    fail "rw-node-go binary not found"
 fi
 
 mkdir -p "${WORK_DIR}"
@@ -119,8 +98,7 @@ if [[ "${HTTP_FRONT_ENABLED}" == "true" ]]; then
 elif [[ "${HTTP_FRONT_ENABLED}" == "false" ]]; then
     start_health_server
 else
-    echo "[Go PaaS] ERROR: HTTP_FRONT_ENABLED must be true or false"
-    exit 1
+    fail "HTTP_FRONT_ENABLED must be true or false"
 fi
 
 cd "${WORK_DIR}"

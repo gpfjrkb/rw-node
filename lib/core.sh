@@ -1,0 +1,237 @@
+#!/usr/bin/env bash
+# shellcheck shell=bash
+[[ -n "${_RW_NODE_CORE_LOADED:-}" ]] && return 0
+_RW_NODE_CORE_LOADED=1
+
+LOG_PREFIX="${LOG_PREFIX:-[rw-node]}"
+
+log() {
+  printf '%s %s\n' "$LOG_PREFIX" "$*"
+}
+
+fail() {
+  printf '%s ERROR: %s\n' "$LOG_PREFIX" "$*" >&2
+  exit 1
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || fail "required command not found: $1"
+}
+
+trim() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+unquote_env_value() {
+  local value
+  value="$(trim "$1")"
+  if [[ ${#value} -ge 2 ]]; then
+    if [[ ${value:0:1} == "'" && ${value: -1} == "'" ]]; then
+      value="${value:1:${#value}-2}"
+    elif [[ ${value:0:1} == '"' && ${value: -1} == '"' ]]; then
+      value="${value:1:${#value}-2}"
+    fi
+  fi
+  printf '%s' "$value"
+}
+
+strip_env_comment() {
+  local value
+  value="$(trim "$1")"
+
+  if [[ ${#value} -ge 2 && ${value:0:1} == "'" ]]; then
+    if [[ "$value" =~ ^\'([^\']*)\'[[:space:]]*(#.*)?$ ]]; then
+      printf "'%s'" "${BASH_REMATCH[1]}"
+      return 0
+    fi
+    fail ".env value has unmatched single quote"
+  fi
+
+  if [[ ${#value} -ge 2 && ${value:0:1} == '"' ]]; then
+    if [[ "$value" =~ ^\"([^\"]*)\"[[:space:]]*(#.*)?$ ]]; then
+      printf '"%s"' "${BASH_REMATCH[1]}"
+      return 0
+    fi
+    fail ".env value has unmatched double quote"
+  fi
+
+  if [[ "$value" == *"#"* ]]; then
+    value="${value%%#*}"
+  fi
+  trim "$value"
+}
+
+load_env_file() {
+  local env_file="${1:-${ENV_FILE:-${CWD:-.}/.env}}"
+  [[ -f "$env_file" ]] || return 0
+
+  local line_no=0
+  local line key value
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line_no=$((line_no + 1))
+    line="${line%$'\r'}"
+    line="$(trim "$line")"
+    [[ -z "$line" || ${line:0:1} == "#" ]] && continue
+
+    if [[ "$line" == export[[:space:]]* ]]; then
+      line="${line#export}"
+      line="$(trim "$line")"
+    fi
+
+    if [[ "$line" != *=* ]]; then
+      fail ".env line $line_no is invalid: missing '='"
+    fi
+
+    key="${line%%=*}"
+    value="${line#*=}"
+    key="$(trim "$key")"
+
+    if [[ ! "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      fail ".env line $line_no has invalid variable name: $key"
+    fi
+
+    value="$(strip_env_comment "$value")"
+    value="$(unquote_env_value "$value")"
+    if [[ ! -v "$key" ]]; then
+      printf -v "$key" '%s' "$value"
+      export "$key"
+    fi
+  done < "$env_file"
+}
+
+set_default_env() {
+  [[ -v NODE_PORT ]]              || NODE_PORT=2222
+  [[ -v NODE_TLS_CLIENT_AUTH ]]   || NODE_TLS_CLIENT_AUTH=none
+  [[ -v INTERNAL_REST_PORT ]]     || INTERNAL_REST_PORT=61001
+  [[ -v REQUIRE_SECRET_KEY ]]     || REQUIRE_SECRET_KEY=true
+  [[ -v RW_NODE_DIR ]]            || RW_NODE_DIR="${RW_NODE_DIR_DEFAULT:-.}"
+  [[ -v XRAY_LOCATION_ASSET ]]    || XRAY_LOCATION_ASSET="${XRAY_LOCATION_ASSET_DEFAULT:-}"
+  [[ -v HTTP_FRONT_PORT ]]        || HTTP_FRONT_PORT="${PORT:-3000}"
+  CADDY_HTTP_PORT=$((HTTP_FRONT_PORT + 1))
+  [[ -v XHTTP_UPSTREAM_PORT ]]    || XHTTP_UPSTREAM_PORT=8080
+  [[ -v WS_UPSTREAM_PORT ]]       || WS_UPSTREAM_PORT=8880
+  [[ -v HTTP_FRONT_ENABLED ]]     || HTTP_FRONT_ENABLED=true
+  [[ -v CADDY_INDEX_PAGE ]]       || CADDY_INDEX_PAGE="${CADDYIndexPage:-mikutap}"
+  [[ -v REALITY_SPLIT_ENABLED ]]  || REALITY_SPLIT_ENABLED=true
+  [[ -v REALITY_SPLIT_INTERVAL ]] || REALITY_SPLIT_INTERVAL=15
+  [[ -v ARGO_TOKEN ]]             || ARGO_TOKEN=
+  [[ -v ARGO_LOG_LEVEL ]]         || ARGO_LOG_LEVEL=info
+
+  export NODE_PORT NODE_TLS_CLIENT_AUTH INTERNAL_REST_PORT REQUIRE_SECRET_KEY
+  export RW_NODE_DIR XRAY_LOCATION_ASSET HTTP_FRONT_PORT XHTTP_UPSTREAM_PORT WS_UPSTREAM_PORT
+  export HTTP_FRONT_ENABLED CADDY_INDEX_PAGE REALITY_SPLIT_ENABLED REALITY_SPLIT_INTERVAL
+  export ARGO_TOKEN ARGO_LOG_LEVEL
+}
+
+is_port() {
+  [[ "$1" =~ ^[0-9]+$ ]] && (( "$1" >= 1 && "$1" <= 65535 ))
+}
+
+validate_ports() {
+  local name
+  for name in HTTP_FRONT_PORT NODE_PORT XHTTP_UPSTREAM_PORT WS_UPSTREAM_PORT; do
+    is_port "${!name}" || fail "$name must be a valid TCP port"
+  done
+
+  is_port "$CADDY_HTTP_PORT" || fail "CADDY_HTTP_PORT ($CADDY_HTTP_PORT) must be a valid TCP port; adjust HTTP_FRONT_PORT"
+  [[ "$HTTP_FRONT_PORT" != "$NODE_PORT" ]] || fail "HTTP_FRONT_PORT must differ from NODE_PORT"
+  [[ "$CADDY_HTTP_PORT" != "$NODE_PORT" ]] || fail "CADDY_HTTP_PORT ($CADDY_HTTP_PORT) conflicts with NODE_PORT"
+  [[ "$CADDY_HTTP_PORT" != "$XHTTP_UPSTREAM_PORT" ]] || fail "CADDY_HTTP_PORT ($CADDY_HTTP_PORT) conflicts with XHTTP_UPSTREAM_PORT"
+  [[ "$CADDY_HTTP_PORT" != "$WS_UPSTREAM_PORT" ]] || fail "CADDY_HTTP_PORT ($CADDY_HTTP_PORT) conflicts with WS_UPSTREAM_PORT"
+}
+
+wait_for_port() {
+  local port="$1"
+  local pid="${2:-}"
+
+  for _ in $(seq 1 50); do
+    if [[ -n "${pid}" ]] && ! kill -0 "${pid}" 2>/dev/null; then
+      return 1
+    fi
+    if (echo >"/dev/tcp/127.0.0.1/${port}") >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  return 1
+}
+
+canonical_path() {
+  local path="$1"
+  if [[ -d "${path}" ]]; then
+    cd "${path}" && pwd -P
+  elif [[ -e "${path}" ]]; then
+    printf '%s/%s\n' "$(cd "$(dirname "${path}")" && pwd -P)" "$(basename "${path}")"
+  else
+    return 1
+  fi
+}
+
+path_is_same_or_under() {
+  local child="$1"
+  local parent="$2"
+  [[ "${child}" == "${parent}" || "${child}" == "${parent}/"* ]]
+}
+
+directory_has_entries() {
+  local dir="$1"
+  [[ -n "$(find "${dir}" -mindepth 1 -maxdepth 1 -print -quit)" ]]
+}
+
+ensure_linux() {
+  [[ "$(uname -s)" == "Linux" ]] || fail "unsupported platform: $(uname -s); only Linux x64/arm64 is supported"
+}
+
+detect_arch() {
+  case "$(uname -m)" in
+    x86_64|amd64)   printf '%s' "amd64" ;;
+    aarch64|arm64)  printf '%s' "arm64" ;;
+    *) fail "unsupported architecture: $(uname -m); only x64/arm64 is supported" ;;
+  esac
+}
+
+detect_rw_node_go_asset_name() {
+  case "$(uname -m)" in
+    x86_64|amd64)   printf '%s' "rw-node-go-linux-64.tar.gz" ;;
+    aarch64|arm64)  printf '%s' "rw-node-go-linux-arm64-v8a.tar.gz" ;;
+    *) fail "unsupported architecture: $(uname -m); only x64/arm64 is supported" ;;
+  esac
+}
+
+detect_cloudflared_asset_name() {
+  case "$(uname -m)" in
+    x86_64|amd64)   printf '%s' "cloudflared-linux-amd64" ;;
+    aarch64|arm64)  printf '%s' "cloudflared-linux-arm64" ;;
+    *) fail "unsupported architecture: $(uname -m); only x64/arm64 is supported" ;;
+  esac
+}
+
+inspect_env_if_requested() {
+  [[ "${RW_NODE_STARTER_INSPECT_ENV:-}" == "1" ]] || return 0
+  printf 'NODE_PORT=%s\n' "$NODE_PORT"
+  printf 'NODE_TLS_CLIENT_AUTH=%s\n' "$NODE_TLS_CLIENT_AUTH"
+  printf 'INTERNAL_REST_PORT=%s\n' "$INTERNAL_REST_PORT"
+  printf 'REQUIRE_SECRET_KEY=%s\n' "$REQUIRE_SECRET_KEY"
+  printf 'RW_NODE_DIR=%s\n' "$RW_NODE_DIR"
+  printf 'XRAY_LOCATION_ASSET=%s\n' "$XRAY_LOCATION_ASSET"
+  printf 'HTTP_FRONT_PORT=%s\n' "$HTTP_FRONT_PORT"
+  printf 'XHTTP_UPSTREAM_PORT=%s\n' "$XHTTP_UPSTREAM_PORT"
+  printf 'WS_UPSTREAM_PORT=%s\n' "$WS_UPSTREAM_PORT"
+  printf 'CADDY_HTTP_PORT=%s\n' "$CADDY_HTTP_PORT"
+  printf 'HTTP_FRONT_ENABLED=%s\n' "$HTTP_FRONT_ENABLED"
+  printf 'CADDY_INDEX_PAGE=%s\n' "$CADDY_INDEX_PAGE"
+  printf 'REALITY_SPLIT_ENABLED=%s\n' "$REALITY_SPLIT_ENABLED"
+  printf 'REALITY_SPLIT_INTERVAL=%s\n' "$REALITY_SPLIT_INTERVAL"
+  printf 'ARGO_TOKEN_SET=%s\n' "$([[ -n "${ARGO_TOKEN:-}" ]] && printf 'true' || printf 'false')"
+  printf 'ARGO_LOG_LEVEL=%s\n' "$ARGO_LOG_LEVEL"
+  exit 0
+}
+
+dry_run_if_requested() {
+  [[ -n "${RW_NODE_STARTER_DRY_RUN_EXIT:-}" ]] || return 0
+  [[ "$RW_NODE_STARTER_DRY_RUN_EXIT" =~ ^[0-9]+$ ]] || fail "RW_NODE_STARTER_DRY_RUN_EXIT must be numeric"
+  exit "$RW_NODE_STARTER_DRY_RUN_EXIT"
+}

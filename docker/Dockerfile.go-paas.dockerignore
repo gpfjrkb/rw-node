@@ -1,0 +1,9 @@
+.git
+.github
+docs
+scripts
+config/systemd
+config/certs
+renovate.json
+*.md
+!README.md

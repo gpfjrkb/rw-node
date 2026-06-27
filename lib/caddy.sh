@@ -1,6 +1,16 @@
+#!/usr/bin/env bash
+# shellcheck shell=bash
+[[ -n "${_RW_NODE_CADDY_LOADED:-}" ]] && return 0
+_RW_NODE_CADDY_LOADED=1
+
+_CADDY_LIB_DIR="${_CADDY_LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)}"
+# shellcheck source=core.sh
+[[ -n "${_RW_NODE_CORE_LOADED:-}" ]] || source "${_CADDY_LIB_DIR}/core.sh"
+
 DEFAULT_CADDY_INDEX_PAGE="mikutap"
 DEFAULT_CADDY_INDEX_PAGE_URL="https://github.com/AYJCSGM/mikutap/archive/master.zip"
 CADDY_SITE_MARKER=".rw-node-caddy-site-dir"
+CADDY_ADMIN_SOCK="${CADDY_ADMIN_SOCK:-/tmp/caddy-admin.sock}"
 
 resolve_caddy_index_page() {
     local resource="$1"
@@ -64,7 +74,7 @@ reset_directory() {
 
     case "${target_dir}" in
         ""|"/"|"/bin"|"/etc"|"/lib"|"/opt"|"/root"|"/sbin"|"/tmp"|"/usr"|"/usr/bin"|"/usr/local"|"/usr/local/bin"|"/var"|"/var/lib")
-            echo "${CADDY_LOG_PREFIX:-[PaaS]} ERROR: refusing to reset unsafe directory: ${target_dir}"
+            log "ERROR: refusing to reset unsafe directory: ${target_dir}"
             return 1
             ;;
     esac
@@ -74,85 +84,23 @@ reset_directory() {
     if [[ -n "${WORK_DIR:-}" && -d "${WORK_DIR}" ]]; then
         work_real="$(cd "${WORK_DIR}" && pwd -P)"
     fi
-    if [[ -n "${CONF_DIR:-}" && -d "${CONF_DIR}" ]]; then
-        conf_real="$(cd "${CONF_DIR}" && pwd -P)"
+    if [[ -n "${CADDY_CONF_DIR:-}" && -d "${CADDY_CONF_DIR}" ]]; then
+        conf_real="$(cd "${CADDY_CONF_DIR}" && pwd -P)"
     fi
 
     case "${target_real}" in
         ""|"/"|"/bin"|"/etc"|"/lib"|"/opt"|"/root"|"/sbin"|"/tmp"|"/usr"|"/usr/bin"|"/usr/local"|"/usr/local/bin"|"/var"|"/var/lib")
-            echo "${CADDY_LOG_PREFIX:-[PaaS]} ERROR: refusing to reset unsafe directory: ${target_real}"
+            log "ERROR: refusing to reset unsafe directory: ${target_real}"
             return 1
             ;;
     esac
 
     if [[ "${target_real}" == "${work_real}" || "${target_real}" == "${conf_real}" ]]; then
-        echo "${CADDY_LOG_PREFIX:-[PaaS]} ERROR: refusing to reset unsafe directory: ${target_dir}"
+        log "ERROR: refusing to reset unsafe directory: ${target_dir}"
         return 1
     fi
 
     find "${target_real}" -mindepth 1 -maxdepth 1 -exec rm -rf {} \;
-}
-
-canonical_path() {
-    local path="$1"
-    local dir
-    local base
-
-    if [[ -d "${path}" ]]; then
-        cd "${path}" && pwd -P
-    elif [[ -e "${path}" ]]; then
-        dir="$(dirname "${path}")"
-        base="$(basename "${path}")"
-        printf '%s/%s\n' "$(cd "${dir}" && pwd -P)" "${base}"
-    else
-        return 1
-    fi
-}
-
-path_is_same_or_under() {
-    local child="$1"
-    local parent="$2"
-
-    [[ "${child}" == "${parent}" || "${child}" == "${parent}/"* ]]
-}
-
-directory_has_entries() {
-    local dir="$1"
-
-    [[ -n "$(find "${dir}" -mindepth 1 -maxdepth 1 -print -quit)" ]]
-}
-
-site_dir_can_be_reset() {
-    local site_dir="$1"
-    local site_real
-    local default_site_real=""
-
-    mkdir -p "${site_dir}"
-    site_real="$(canonical_path "${site_dir}")"
-
-    if [[ -n "${WORK_DIR:-}" ]]; then
-        mkdir -p "${WORK_DIR}/www"
-        default_site_real="$(canonical_path "${WORK_DIR}/www")"
-    fi
-
-    if [[ -f "${site_real}/${CADDY_SITE_MARKER}" || "${site_real}" == "${default_site_real}" ]]; then
-        return 0
-    fi
-
-    if directory_has_entries "${site_real}"; then
-        echo "${CADDY_LOG_PREFIX:-[PaaS]} ERROR: custom CADDY_SITE_DIR must be empty or contain ${CADDY_SITE_MARKER}: ${site_dir}"
-        return 1
-    fi
-}
-
-publish_static_site() {
-    local staging_dir="$1"
-    local final_site_dir="$2"
-
-    site_dir_can_be_reset "${final_site_dir}" || return 1
-    reset_directory "${final_site_dir}" || return 1
-    cp -a "${staging_dir}/." "${final_site_dir}/"
-    touch "${final_site_dir}/${CADDY_SITE_MARKER}"
 }
 
 reject_resource_inside_site_dir() {
@@ -180,15 +128,48 @@ reject_resource_inside_site_dir() {
     site_real="$(canonical_path "${site_dir}")"
 
     if path_is_same_or_under "${resource_real}" "${site_real}" || path_is_same_or_under "${site_real}" "${resource_real}"; then
-        echo "${CADDY_LOG_PREFIX:-[PaaS]} ERROR: CADDY_INDEX_PAGE source and CADDY_SITE_DIR must be separate directories: ${local_resource}"
+        log "ERROR: CADDY_INDEX_PAGE source and CADDY_SITE_DIR must be separate directories: ${local_resource}"
         return 1
     fi
+}
+
+site_dir_can_be_reset() {
+    local site_dir="$1"
+    local site_real
+    local default_site_real=""
+
+    mkdir -p "${site_dir}"
+    site_real="$(canonical_path "${site_dir}")"
+
+    if [[ -n "${WORK_DIR:-}" ]]; then
+        mkdir -p "${WORK_DIR}/www"
+        default_site_real="$(canonical_path "${WORK_DIR}/www")"
+    fi
+
+    if [[ -f "${site_real}/${CADDY_SITE_MARKER}" || "${site_real}" == "${default_site_real}" ]]; then
+        return 0
+    fi
+
+    if directory_has_entries "${site_real}"; then
+        log "ERROR: custom CADDY_SITE_DIR must be empty or contain ${CADDY_SITE_MARKER}: ${site_dir}"
+        return 1
+    fi
+}
+
+publish_static_site() {
+    local staging_dir="$1"
+    local final_site_dir="$2"
+
+    site_dir_can_be_reset "${final_site_dir}" || return 1
+    reset_directory "${final_site_dir}" || return 1
+    cp -a "${staging_dir}/." "${final_site_dir}/"
+    touch "${final_site_dir}/${CADDY_SITE_MARKER}"
 }
 
 create_fallback_static_site() {
     local site_dir="${1:-${CADDY_SITE_DIR}}"
 
-    cat > "${site_dir}/index.html" << 'EOF'
+    cat > "${site_dir}/index.html" << 'FALLBACK_EOF'
 <!doctype html>
 <html lang="en">
 <head>
@@ -222,7 +203,7 @@ create_fallback_static_site() {
   </main>
 </body>
 </html>
-EOF
+FALLBACK_EOF
 }
 
 copy_extracted_static_site() {
@@ -272,7 +253,7 @@ install_caddy_index_resource() {
             return 1
             ;;
         http://*|https://*)
-            echo "${CADDY_LOG_PREFIX:-[PaaS]} Downloading static camouflage page: ${resource}"
+            log "Downloading static camouflage page: ${resource}"
             rm -f "${download_path}"
             if ! curl -fsSL --retry 3 --connect-timeout 10 --max-time 60 "${resource}" -o "${download_path}"; then
                 rm -f "${download_path}"
@@ -290,7 +271,7 @@ install_caddy_index_resource() {
             elif [[ -f "${resource}" ]]; then
                 install_caddy_index_file "${resource}" "${site_dir}"
             else
-                echo "${CADDY_LOG_PREFIX:-[PaaS]} ERROR: static camouflage page resource not found: ${resource}"
+                log "ERROR: static camouflage page resource not found: ${resource}"
                 return 1
             fi
             ;;
@@ -311,12 +292,12 @@ setup_caddy_static_site() {
     reset_directory "${staging_dir}" || return 1
 
     if ! install_caddy_index_resource "${resolved_resource}" "${staging_dir}"; then
-        echo "${CADDY_LOG_PREFIX:-[PaaS]} WARN: using fallback static camouflage page"
+        log "WARN: using fallback static camouflage page"
         create_fallback_static_site "${staging_dir}"
     fi
 
     if [[ ! -f "${staging_dir}/index.html" ]]; then
-        echo "${CADDY_LOG_PREFIX:-[PaaS]} WARN: static camouflage page has no index.html; using fallback"
+        log "WARN: static camouflage page has no index.html; using fallback"
         reset_directory "${staging_dir}" || return 1
         create_fallback_static_site "${staging_dir}"
     fi
@@ -325,14 +306,12 @@ setup_caddy_static_site() {
     staging_real="$(canonical_path "${staging_dir}")"
     final_real="$(canonical_path "${final_site_dir}")"
     if path_is_same_or_under "${staging_real}" "${final_real}" || path_is_same_or_under "${final_real}" "${staging_real}"; then
-        echo "${CADDY_LOG_PREFIX:-[PaaS]} ERROR: CADDY_SITE_DIR and Caddy staging directory must not contain each other: ${final_site_dir}"
+        log "ERROR: CADDY_SITE_DIR and Caddy staging directory must not contain each other: ${final_site_dir}"
         return 1
     fi
 
     publish_static_site "${staging_dir}" "${final_site_dir}"
 }
-
-CADDY_ADMIN_SOCK="/tmp/caddy-admin.sock"
 
 write_caddy_layer4_block() {
     local reality_snis="${1:-}"
@@ -443,7 +422,7 @@ http://:${CADDY_HTTP_PORT} {
 EOF
 }
 
-extract_reality_config() {
+extract_reality_config_jq() {
     local config_json="$1"
 
     echo "${config_json}" | jq -r '
@@ -465,9 +444,44 @@ extract_reality_config() {
     ' 2>/dev/null || true
 }
 
-start_reality_watcher() {
+_detect_reality_watcher_backend() {
+    local starter_runtime="${STARTER_RUNTIME:-}"
+
+    if [[ -n "${starter_runtime}" ]]; then
+        case "${starter_runtime}" in
+            node)
+                if command -v node >/dev/null 2>&1; then
+                    printf 'node'
+                    return 0
+                fi
+                ;;
+            python)
+                if command -v python3 >/dev/null 2>&1; then
+                    printf 'python'
+                    return 0
+                fi
+                ;;
+        esac
+    fi
+
+    if command -v jq >/dev/null 2>&1; then
+        printf 'jq'
+        return 0
+    fi
+    if command -v node >/dev/null 2>&1; then
+        printf 'node'
+        return 0
+    fi
+    if command -v python3 >/dev/null 2>&1; then
+        printf 'python'
+        return 0
+    fi
+
+    return 1
+}
+
+_start_reality_watcher_jq() {
     local config_path="$1"
-    local log_prefix="${CADDY_LOG_PREFIX:-[PaaS]}"
     local interval="${REALITY_SPLIT_INTERVAL:-15}"
     local internal_url="http://127.0.0.1:${INTERNAL_REST_PORT}/internal/get-config"
     local prev_hash=""
@@ -489,7 +503,7 @@ start_reality_watcher() {
         fi
 
         local reality_info
-        reality_info="$(extract_reality_config "${config_json}")"
+        reality_info="$(extract_reality_config_jq "${config_json}")"
         local reality_port=""
         local reality_snis=""
 
@@ -508,85 +522,92 @@ start_reality_watcher() {
         prev_hash="${current_hash}"
 
         if [[ -n "${reality_snis}" && -n "${reality_port}" ]]; then
-            echo "${log_prefix} REALITY split detected: snis=[${reality_snis}] port=${reality_port}"
+            log "REALITY split detected: snis=[${reality_snis}] port=${reality_port}"
             write_caddy_config "${config_path}" "${reality_snis}" "${reality_port}"
         else
-            echo "${log_prefix} REALITY split cleared, reverting to default TLS routing"
+            log "REALITY split cleared, reverting to default TLS routing"
             write_caddy_config "${config_path}" "" ""
         fi
 
         if "${CADDY_BIN}" reload --config "${config_path}" --adapter caddyfile --address "unix/${CADDY_ADMIN_SOCK}" 2>/dev/null; then
-            echo "${log_prefix} Caddy reloaded with updated REALITY split config"
+            log "Caddy reloaded with updated REALITY split config"
         else
-            echo "${log_prefix} WARN: Caddy reload failed, will retry next cycle"
+            log "WARN: Caddy reload failed, will retry next cycle"
         fi
     done
 }
 
+start_reality_watcher() {
+    local config_path="$1"
+    local backend
+
+    if ! backend="$(_detect_reality_watcher_backend)"; then
+        log "WARN: REALITY dynamic split disabled (no jq, node, or python3 available)"
+        return 0
+    fi
+
+    case "${backend}" in
+        jq)
+            log "REALITY watcher using jq backend"
+            _start_reality_watcher_jq "${config_path}"
+            ;;
+        node)
+            local watcher_script="${_CADDY_LIB_DIR}/reality-watcher.js"
+            if [[ ! -f "${watcher_script}" ]]; then
+                log "WARN: REALITY watcher script not found: ${watcher_script}"
+                return 0
+            fi
+            log "REALITY watcher using Node.js backend"
+            node "${watcher_script}" "${config_path}"
+            ;;
+        python)
+            local watcher_script="${_CADDY_LIB_DIR}/reality-watcher.py"
+            if [[ ! -f "${watcher_script}" ]]; then
+                log "WARN: REALITY watcher script not found: ${watcher_script}"
+                return 0
+            fi
+            log "REALITY watcher using Python backend"
+            python3 "${watcher_script}" "${config_path}"
+            ;;
+    esac
+}
+
 start_caddy_front() {
-    local config_path="${CADDY_CONF_DIR}/Caddyfile"
-    local log_prefix="${CADDY_LOG_PREFIX:-[PaaS]}"
-
-    if ! is_port "${HTTP_FRONT_PORT}"; then
-        echo "${log_prefix} ERROR: HTTP_FRONT_PORT must be a valid TCP port"
-        exit 1
-    fi
-
-    if [[ "${HTTP_FRONT_PORT}" == "${NODE_PORT}" ]]; then
-        echo "${log_prefix} ERROR: HTTP_FRONT_PORT must differ from NODE_PORT"
-        exit 1
-    fi
-
-    if ! is_port "${XHTTP_UPSTREAM_PORT}"; then
-        echo "${log_prefix} ERROR: XHTTP_UPSTREAM_PORT must be a valid TCP port"
-        exit 1
-    fi
-
-    if ! is_port "${WS_UPSTREAM_PORT}"; then
-        echo "${log_prefix} ERROR: WS_UPSTREAM_PORT must be a valid TCP port"
-        exit 1
-    fi
-
-    CADDY_HTTP_PORT=$((HTTP_FRONT_PORT + 1))
-
-    if ! is_port "${CADDY_HTTP_PORT}"; then
-        echo "${log_prefix} ERROR: CADDY_HTTP_PORT (${CADDY_HTTP_PORT}) must be a valid TCP port; adjust HTTP_FRONT_PORT"
-        exit 1
-    fi
-
-    if [[ "${CADDY_HTTP_PORT}" == "${NODE_PORT}" ]]; then
-        echo "${log_prefix} ERROR: CADDY_HTTP_PORT (${CADDY_HTTP_PORT}) conflicts with NODE_PORT"
-        exit 1
-    fi
-
-    if [[ "${CADDY_HTTP_PORT}" == "${XHTTP_UPSTREAM_PORT}" ]]; then
-        echo "${log_prefix} ERROR: CADDY_HTTP_PORT (${CADDY_HTTP_PORT}) conflicts with XHTTP_UPSTREAM_PORT"
-        exit 1
-    fi
-
-    if [[ "${CADDY_HTTP_PORT}" == "${WS_UPSTREAM_PORT}" ]]; then
-        echo "${log_prefix} ERROR: CADDY_HTTP_PORT (${CADDY_HTTP_PORT}) conflicts with WS_UPSTREAM_PORT"
-        exit 1
-    fi
+    validate_ports
 
     if [[ ! -x "${CADDY_BIN}" ]]; then
-        echo "${log_prefix} ERROR: caddy binary not found"
-        exit 1
+        fail "caddy binary not found: ${CADDY_BIN:-<not set>}"
     fi
 
     mkdir -p "${CADDY_CONF_DIR}"
     setup_caddy_static_site
+
+    local config_path="${CADDY_CONF_DIR}/Caddyfile"
     write_caddy_config "${config_path}"
 
-    "${CADDY_BIN}" validate --config "${config_path}" --adapter caddyfile
+    local validate_output
+    validate_output="$(mktemp)"
+    local caddy_env=()
+    [[ -z "${CADDY_HOME:-}" ]] || caddy_env+=(HOME="${CADDY_HOME}")
+    [[ -z "${CADDY_XDG_DATA_HOME:-}" ]] || caddy_env+=(XDG_DATA_HOME="${CADDY_XDG_DATA_HOME}")
+    [[ -z "${CADDY_XDG_CONFIG_HOME:-}" ]] || caddy_env+=(XDG_CONFIG_HOME="${CADDY_XDG_CONFIG_HOME}")
 
-    echo "${log_prefix} Starting Caddy (layer4 on port ${HTTP_FRONT_PORT}, HTTP on internal port ${CADDY_HTTP_PORT})"
-    "${CADDY_BIN}" run --config "${config_path}" --adapter caddyfile &
+    if ! env "${caddy_env[@]}" "${CADDY_BIN}" validate --config "${config_path}" --adapter caddyfile >"${validate_output}" 2>&1; then
+        cat "${validate_output}" >&2
+        rm -f "${validate_output}"
+        fail "Caddy configuration validation failed"
+    fi
+    rm -f "${validate_output}"
+    log "Caddy configuration is valid"
+
+    log "Starting Caddy (layer4 on port ${HTTP_FRONT_PORT}, HTTP on internal port ${CADDY_HTTP_PORT})"
+    env "${caddy_env[@]}" "${CADDY_BIN}" run --config "${config_path}" --adapter caddyfile &
     caddy_pid=$!
 
-    if ! wait_for_port "${HTTP_FRONT_PORT}" "${caddy_pid}"; then
-        echo "${log_prefix} ERROR: Caddy did not accept TCP connections on 127.0.0.1:${HTTP_FRONT_PORT}"
-        terminate
-        exit 1
+    if [[ -z "${CADDY_SKIP_PORT_WAIT:-}" ]]; then
+        if ! wait_for_port "${HTTP_FRONT_PORT}" "${caddy_pid}"; then
+            log "ERROR: Caddy did not accept TCP connections on 127.0.0.1:${HTTP_FRONT_PORT}"
+            return 1
+        fi
     fi
 }

@@ -44,7 +44,8 @@ RUN set -ex; \
     printf '%s\n' "${RW_NODE_GO_VERSION}" > /opt/rw-node/.rw-node-go-version; \
     rm -rf /tmp/* /var/cache/apk/*
 
-COPY paas-caddy-front.sh docker-entrypoint.go-paas.sh /usr/local/bin/
+COPY docker/docker-entrypoint.go-paas.sh /usr/local/bin/
+COPY lib/ /usr/local/lib/rw-node/
 RUN chmod +x /usr/local/bin/docker-entrypoint.go-paas.sh
 
 ENV REQUIRE_SECRET_KEY=true
