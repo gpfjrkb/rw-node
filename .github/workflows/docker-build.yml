@@ -8,11 +8,6 @@ on:
         description: '要构建的版本号'
         required: true
         type: string
-      go_paas_only:
-        description: '仅构建 Go PaaS 镜像'
-        required: false
-        type: boolean
-        default: false
 
 env:
   REGISTRY: ghcr.io
@@ -20,38 +15,22 @@ env:
 
 jobs:
   build:
-    name: Build Docker Images
+    name: Build Docker Image
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-    
-    strategy:
-      matrix:
-        include:
-          - variant: lite
-            dockerfile: docker/Dockerfile
-            suffix: "-lite"
-            description: "Lightweight (Go Supervisord, No Python)"
-          - variant: official
-            dockerfile: docker/Dockerfile.official
-            suffix: "-official"
-            description: "Official Compatible (Python Supervisord)"
-          - variant: go-paas
-            dockerfile: docker/Dockerfile.go-paas
-            suffix: "-go-paas"
-            description: "Go Implementation PaaS HTTPS Direct"
-    
+
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-      
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
-      
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
-      
+
       - name: Login to GHCR
         uses: docker/login-action@v4
         with:
@@ -61,35 +40,19 @@ jobs:
 
       - name: Resolve rw-node-go version
         id: go_version
-        if: matrix.variant == 'go-paas'
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          version="$(gh api repos/x-dora/rw-node-go/releases/latest --jq '.tag_name')"
-          if [[ -z "$version" || "$version" == "null" ]]; then
-            echo "::error::Unable to resolve x-dora/rw-node-go latest release"
+          version="$(tr -d '[:space:]' < .go-paas-version)"
+          if [[ -z "$version" ]]; then
+            echo "::error::Unable to resolve rw-node-go version from .go-paas-version"
             exit 1
           fi
           version_stripped="${version#v}"
           echo "version=$version_stripped" >> "$GITHUB_OUTPUT"
           echo "version_raw=$version" >> "$GITHUB_OUTPUT"
-      
+
       - name: Extract metadata
         id: meta
-        if: matrix.variant != 'go-paas' && inputs.go_paas_only != true
-        uses: docker/metadata-action@v6
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=raw,value=${{ inputs.version }}${{ matrix.suffix }}
-            type=raw,value=latest${{ matrix.suffix }}
-          labels: |
-            org.opencontainers.image.description=${{ matrix.description }}
-
-      - name: Extract Go metadata
-        id: go_meta
-        if: matrix.variant == 'go-paas'
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
@@ -99,33 +62,17 @@ jobs:
             type=raw,value=latest
             type=raw,value=latest-go-paas
           labels: |
-            org.opencontainers.image.description=${{ matrix.description }}
-      
+            org.opencontainers.image.description=Go Implementation PaaS HTTPS Direct
+
       - name: Build and push
-        if: matrix.variant != 'go-paas' && inputs.go_paas_only != true
         uses: docker/build-push-action@v7
         with:
-          context: ./docker
-          file: ${{ matrix.dockerfile }}
+          context: .
+          file: docker/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            VERSION=${{ inputs.version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Build and push Go PaaS
-        if: matrix.variant == 'go-paas'
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: ${{ matrix.dockerfile }}
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.go_meta.outputs.tags }}
-          labels: ${{ steps.go_meta.outputs.labels }}
           build-args: |
             RW_NODE_GO_VERSION=${{ steps.go_version.outputs.version_raw }}
           cache-from: type=gha
@@ -145,9 +92,3 @@ jobs:
           echo "|-----|-------------|" >> $GITHUB_STEP_SUMMARY
           echo "| \`ghcr.io/${{ github.repository }}:latest\` | Go Implementation PaaS HTTPS Direct |" >> $GITHUB_STEP_SUMMARY
           echo "| \`ghcr.io/${{ github.repository }}:latest-go-paas\` | Go Implementation PaaS HTTPS Direct (alias) |" >> $GITHUB_STEP_SUMMARY
-          if [[ "${{ inputs.go_paas_only }}" != "true" ]]; then
-            echo "| \`ghcr.io/${{ github.repository }}:${{ inputs.version }}-lite\` | Lightweight (Go Supervisord) |" >> $GITHUB_STEP_SUMMARY
-            echo "| \`ghcr.io/${{ github.repository }}:latest-lite\` | Lightweight (Go Supervisord) |" >> $GITHUB_STEP_SUMMARY
-            echo "| \`ghcr.io/${{ github.repository }}:${{ inputs.version }}-official\` | Official Compatible (Python Supervisord) |" >> $GITHUB_STEP_SUMMARY
-            echo "| \`ghcr.io/${{ github.repository }}:latest-official\` | Official Compatible (Python Supervisord) |" >> $GITHUB_STEP_SUMMARY
-          fi

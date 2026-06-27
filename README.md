@@ -1,56 +1,21 @@
 # RW-Node 轻量化部署
 
-RW-Node 是 [remnawave/node](https://github.com/remnawave/node) 的轻量化构建与部署方案。本仓库不维护 Remnawave Node 的应用源码，而是按 `.upstream-version` 指定的上游版本自动拉取源码、构建产物并发布安装包和 Docker 镜像。
-
-它更适合作为 Remnawave Node 的“部署/分发层”：保留上游业务逻辑，减少运行依赖，并提供 VPS、Docker、PaaS 场景下可直接使用的交付物。
+RW-Node 是 [remnawave/node](https://github.com/remnawave/node) 的轻量化部署方案，使用非官方 [x-dora/rw-node-go](https://github.com/x-dora/rw-node-go) Go 实现。
 
 ## 选择部署方式
 
 | 场景 | 推荐方式 | 说明 |
 |------|----------|------|
-| PaaS / Docker / 更小体积 | `ghcr.io/x-dora/rw-node:latest` | Go 实现 PaaS 版,内置 Caddy HTTP 前置,无 Node.js 运行时 |
-| 常规 Docker / Compose（JS 实现） | `ghcr.io/x-dora/rw-node:latest-lite` | JS 轻量版,Go Supervisord,无 Python |
-| 需要贴近官方镜像行为 | `ghcr.io/x-dora/rw-node:latest-official` | 官方兼容版,保留 Python Supervisord |
-| 没有 Docker 的 VPS / 容器 | `scripts/install.sh` | 自动安装 Node.js、Xray-core、Supervisord 和服务脚本 |
-
-> 需要严格兼容官方 Remnawave Node 行为时,优先使用 JS 兼容实现:`latest-lite`、`latest-official` 或默认的一键安装脚本。`latest` 使用非官方 Go 实现。
+| PaaS / Docker / 更小体积 | `ghcr.io/x-dora/rw-node:latest` | Go 实现，内置 Caddy HTTP 前置，无 Node.js 运行时 |
+| 没有 Docker 的 VPS / 容器 | `scripts/install.sh` | 自动安装 rw-node-go、Caddy、Xray geodata |
 
 ## 快速开始
 
-### Docker 轻量版
+### Docker PaaS HTTPS 直连
 
 ```bash
 docker run -d \
   --name rw-node \
-  --restart unless-stopped \
-  -e NODE_PORT=2222 \
-  -e SECRET_KEY=YOUR_SECRET_KEY \
-  -e XTLS_API_PORT=61000 \
-  -p 2222:2222 \
-  ghcr.io/x-dora/rw-node:latest-lite
-```
-
-Docker Compose:
-
-```yaml
-services:
-  rw-node:
-    image: ghcr.io/x-dora/rw-node:latest-lite
-    container_name: rw-node
-    restart: unless-stopped
-    environment:
-      - NODE_PORT=2222
-      - SECRET_KEY=YOUR_SECRET_KEY
-      - XTLS_API_PORT=61000
-    ports:
-      - "2222:2222"
-```
-
-### PaaS HTTPS 直连
-
-```bash
-docker run -d \
-  --name rw-node-paas \
   -e SECRET_KEY=YOUR_SECRET_KEY \
   -e NODE_PORT=2222 \
   -e NODE_TLS_CLIENT_AUTH=none \
@@ -66,13 +31,21 @@ https://rw-node.example-paas.app
 
 Panel 端还需要信任该 HTTPS 域名证书链对应的 Root CA。详细配置见 [PaaS HTTPS 直连文档](docs/paas.md)。
 
-### 一键脚本安装
+### Docker Compose
 
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/install.sh)
+```yaml
+services:
+  rw-node:
+    image: ghcr.io/x-dora/rw-node:latest
+    container_name: rw-node
+    restart: unless-stopped
+    environment:
+      - SECRET_KEY=YOUR_SECRET_KEY
+      - NODE_PORT=2222
+      - NODE_TLS_CLIENT_AUTH=none
 ```
 
-静默安装：
+### 一键脚本安装
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/install.sh) \
@@ -80,7 +53,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/
   --port 2222
 ```
 
-更多参数、Go 实现安装、更新和卸载说明见 [一键脚本安装文档](docs/install-script.md)。
+更多参数和管理命令见 [一键脚本安装文档](docs/install-script.md)。
 
 ## 镜像标签
 
@@ -88,15 +61,11 @@ bash <(curl -fsSL https://raw.githubusercontent.com/x-dora/rw-node/main/scripts/
 |------|------|
 | `ghcr.io/x-dora/rw-node:latest` | Go 实现 PaaS 版（= `latest-go-paas`） |
 | `ghcr.io/x-dora/rw-node:latest-go-paas` | Go 实现 PaaS 版（别名） |
-| `ghcr.io/x-dora/rw-node:latest-lite` | JS 轻量版,Go Supervisord,无 Python |
-| `ghcr.io/x-dora/rw-node:latest-official` | 官方兼容版,Python Supervisord |
 
 Release workflow 也会发布固定版本标签：
 
-- `ghcr.io/x-dora/rw-node:<go-version>` — Go 实现版本号（如 `1.2.3`）
+- `ghcr.io/x-dora/rw-node:<go-version>` — Go 实现版本号（如 `0.5.0`）
 - `ghcr.io/x-dora/rw-node:<go-version>-go-paas` — 同上（别名）
-- `ghcr.io/x-dora/rw-node:<version>-lite` — 上游版本号（如 `2.7.0`）
-- `ghcr.io/x-dora/rw-node:<version>-official`
 
 ## 常用环境变量
 
@@ -104,56 +73,18 @@ Release workflow 也会发布固定版本标签：
 |--------|------|--------|
 | `NODE_PORT` | 节点主 API 监听端口 | `2222` |
 | `SECRET_KEY` | Remnawave Panel 中的节点密钥 | - |
-| `XTLS_API_PORT` | Xray API 内部端口，不要公开 | `61000` |
-| `NODE_TLS_CLIENT_AUTH` | Go 模式或 PaaS HTTPS 直连中的 TLS 客户端证书策略，PaaS 常用 `none` | `mtls` |
+| `INTERNAL_REST_PORT` | Internal REST 内部端口，不要公开 | `61001` |
+| `NODE_TLS_CLIENT_AUTH` | TLS 客户端证书策略，PaaS 常用 `none` | `mtls` |
 | `RW_NODE_DIR` | 脚本安装时的工作目录 | `/opt/rw-node` |
 
 PaaS 镜像还支持 `PORT`、`HTTP_FRONT_ENABLED`、`HTTP_FRONT_PORT`、`XHTTP_UPSTREAM_PORT`、`WS_UPSTREAM_PORT`、`CADDY_INDEX_PAGE`、`CADDY_DEFAULT_SITE_DIR`、`RW_NODE_APP_DIR` 等变量，见 [PaaS HTTPS 直连文档](docs/paas.md)。
 
-## 目录结构
-
-脚本安装时，所有文件默认存放在 `/opt/rw-node`，可通过 `RW_NODE_DIR` 自定义：
-
-```text
-${RW_NODE_DIR}/                 # 工作目录（默认 /opt/rw-node）
-├── .env                        # 环境变量配置
-├── start.sh                    # 启动脚本
-├── dist/                       # 编译后的代码
-├── libs/                       # 库文件
-├── node_modules/               # 依赖
-├── node/                       # Node.js 二进制
-├── package.json
-├── bin/                        # 可执行文件
-│   ├── xray                    # Xray 内核
-│   ├── rw-core -> xray         # Xray 符号链接
-│   ├── supervisord             # Supervisord（Go 版）
-│   ├── cloudflared             # Cloudflare Tunnel（可选）
-│   ├── xlogs                   # 日志查看脚本
-│   ├── xerrors                 # 错误日志脚本
-│   └── rw-node-status          # 状态查看脚本
-├── share/
-│   └── xray/                   # Xray 资源文件
-│       ├── geoip.dat
-│       └── geosite.dat
-├── conf/                       # 运行时配置
-│   └── supervisord.conf        # 动态生成
-├── run/                        # 运行时文件
-│   ├── supervisord-*.sock
-│   ├── supervisord-*.pid
-│   └── remnawave-internal-*.sock
-└── logs/                       # 日志文件
-    ├── supervisord.log
-    ├── xray.out.log
-    └── xray.err.log
-```
-
 ## 重要注意事项
 
 - `SECRET_KEY` 必须和 Remnawave Panel 中配置的节点密钥一致。
-- `XTLS_API_PORT` 是内部端口，不应通过 Docker、VPS 防火墙或 PaaS 入站公开。
+- `INTERNAL_REST_PORT` 是内部端口，不应通过 Docker、VPS 防火墙或 PaaS 入站公开。
 - PaaS HTTPS 直连推荐设置 `NODE_TLS_CLIENT_AUTH=none`，并在 Panel 端追加 PaaS HTTPS 域名证书链对应的 Root CA。
 - 不要把 PaaS 持久化卷挂载到 `/opt/rw-node`，也不要把 `RW_NODE_DIR` 指向空目录，否则可能覆盖镜像内应用文件并导致 `application entrypoint is missing`。
-- `latest`（及其别名 `latest-go-paas`）和 `install.sh --impl go` 使用非官方 [x-dora/rw-node-go](https://github.com/x-dora/rw-node-go) 实现，版本号跟随该项目 release，不跟随 `remnawave/node` 的上游版本号。
 
 ## 详细文档
 
@@ -169,4 +100,4 @@ AGPL-3.0-only
 
 - [Remnawave Panel 文档](https://docs.rw/)
 - [原始 Node 仓库](https://github.com/remnawave/node)
-- [Go Supervisord](https://github.com/ochinchina/supervisord)
+- [Go 实现](https://github.com/x-dora/rw-node-go)

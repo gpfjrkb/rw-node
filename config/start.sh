@@ -3,220 +3,141 @@
 set -euo pipefail
 
 #######################################
-# RW-Node 启动脚本
+# RW-Node 启动脚本 (Go-only bare-metal)
 #######################################
 
 WORK_DIR="${RW_NODE_DIR:-/opt/rw-node}"
-BIN_DIR="${WORK_DIR}/bin"
-LOG_DIR="${WORK_DIR}/logs"
-RUN_DIR="${WORK_DIR}/run"
-CONF_DIR="${WORK_DIR}/conf"
-ASSET_DIR="${WORK_DIR}/share/xray"
-NODE_PID_PATH="${RUN_DIR}/rw-node.pid"
+APP_BIN="${WORK_DIR}/bin/rw-node-go"
+CADDY_BIN="${CADDY_BIN:-${WORK_DIR}/bin/caddy}"
+CADDY_CONF_DIR="${WORK_DIR}/conf/caddy"
+CADDY_SITE_DIR="${CADDY_SITE_DIR:-${WORK_DIR}/www}"
+CADDY_DEFAULT_SITE_DIR="${CADDY_DEFAULT_SITE_DIR:-${WORK_DIR}/default-www}"
+RW_NODE_LIB_DIR="${RW_NODE_LIB_DIR:-${WORK_DIR}/lib}"
+XRAY_LOCATION_ASSET="${XRAY_LOCATION_ASSET:-${WORK_DIR}/share/xray}"
+LOG_PREFIX="[rw-node]"
 
-mkdir -p "${BIN_DIR}" "${LOG_DIR}" "${RUN_DIR}" "${CONF_DIR}" "${ASSET_DIR}"
+# shellcheck source=../lib/core.sh
+source "${RW_NODE_LIB_DIR}/core.sh"
+# shellcheck source=../lib/caddy.sh
+source "${RW_NODE_LIB_DIR}/caddy.sh"
 
-rm -f "${RUN_DIR}"/remnawave-internal-*.sock 2>/dev/null || true
-rm -f "${RUN_DIR}"/supervisord-*.sock 2>/dev/null || true
-rm -f "${RUN_DIR}"/supervisord-*.pid 2>/dev/null || true
-rm -f "${NODE_PID_PATH}" 2>/dev/null || true
+# ── 目录初始化 ─────────────────────────────────────────────
+mkdir -p "${WORK_DIR}/bin" "${WORK_DIR}/logs" "${WORK_DIR}/run" \
+         "${WORK_DIR}/conf" "${WORK_DIR}/share/xray" "${CADDY_CONF_DIR}"
 
-load_env_file() {
-    if [[ -f "${WORK_DIR}/.env" ]]; then
-        set -a
-        # shellcheck disable=SC1090
-        source "${WORK_DIR}/.env"
-        set +a
-    fi
-}
+# ── 清理上一次运行遗留的运行时文件 ──────────────────────────
+rm -f "${WORK_DIR}/run"/*.sock 2>/dev/null || true
+rm -f "${WORK_DIR}/run"/*.pid 2>/dev/null || true
 
-generate_random() {
-    local length="${1:-64}"
-    local value
+# ── 加载环境变量 ───────────────────────────────────────────
+load_env_file "${WORK_DIR}/.env"
 
-    set +o pipefail
-    value=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c "$length")
-    set -o pipefail
-    printf '%s' "$value"
-}
+# ── 设置默认值 ─────────────────────────────────────────────
+# 裸金属环境默认不启用 Caddy HTTP 前置（与 Docker 默认 true 不同）
+NODE_PORT="${NODE_PORT:-2222}"
+NODE_TLS_CLIENT_AUTH="${NODE_TLS_CLIENT_AUTH:-mtls}"
+INTERNAL_REST_PORT="${INTERNAL_REST_PORT:-61001}"
+REQUIRE_SECRET_KEY="${REQUIRE_SECRET_KEY:-true}"
+RW_NODE_DIR="${WORK_DIR}"
+HTTP_FRONT_ENABLED="${HTTP_FRONT_ENABLED:-false}"
+HTTP_FRONT_PORT="${HTTP_FRONT_PORT:-${PORT:-3000}}"
+CADDY_HTTP_PORT=$((HTTP_FRONT_PORT + 1))
+XHTTP_UPSTREAM_PORT="${XHTTP_UPSTREAM_PORT:-8080}"
+WS_UPSTREAM_PORT="${WS_UPSTREAM_PORT:-8880}"
+CADDY_INDEX_PAGE="${CADDY_INDEX_PAGE:-${CADDYIndexPage:-mikutap}}"
+REALITY_SPLIT_ENABLED="${REALITY_SPLIT_ENABLED:-true}"
+REALITY_SPLIT_INTERVAL="${REALITY_SPLIT_INTERVAL:-15}"
 
-find_binary() {
-    local name="$1"
-    local preferred="$2"
+export NODE_PORT NODE_TLS_CLIENT_AUTH INTERNAL_REST_PORT REQUIRE_SECRET_KEY
+export RW_NODE_DIR XRAY_LOCATION_ASSET
 
-    if [[ -n "$preferred" && -x "$preferred" ]]; then
-        echo "$preferred"
-        return 0
-    fi
-
-    if [[ -x "${BIN_DIR}/${name}" ]]; then
-        echo "${BIN_DIR}/${name}"
-        return 0
-    fi
-
-    if [[ -x "/usr/local/bin/${name}" ]]; then
-        echo "/usr/local/bin/${name}"
-        return 0
-    fi
-
-    if command -v "$name" >/dev/null 2>&1; then
-        command -v "$name"
-        return 0
-    fi
-
-    return 1
-}
-
-wait_for_socket() {
-    local socket_path="$1"
-    local pid="$2"
-    local i
-
-    for i in 1 2 3 4 5 6 7 8 9 10; do
-        if [[ -S "$socket_path" ]]; then
-            return 0
-        fi
-        if ! kill -0 "$pid" 2>/dev/null; then
-            return 1
-        fi
-        sleep 1
-    done
-
-    return 1
-}
-
-load_env_file
-
-IMPL=$(cat "${WORK_DIR}/.rw-node-impl" 2>/dev/null || echo "official")
-
-if [[ "$IMPL" == "go" ]]; then
-    if [[ -z "${SECRET_KEY:-}" ]]; then
-        echo "[Entrypoint] ERROR: SECRET_KEY is required"
-        exit 1
-    fi
-
-    if [[ ! -x "${BIN_DIR}/rw-node-go" ]]; then
-        echo "[Entrypoint] ERROR: rw-node-go binary not found"
-        exit 1
-    fi
-
-    export REQUIRE_SECRET_KEY="${REQUIRE_SECRET_KEY:-true}"
-    export NODE_PORT="${NODE_PORT:-2222}"
-    export NODE_TLS_CLIENT_AUTH="${NODE_TLS_CLIENT_AUTH:-mtls}"
-    export INTERNAL_REST_PORT="${INTERNAL_REST_PORT:-61001}"
-    export XRAY_LOCATION_ASSET="${XRAY_LOCATION_ASSET:-${ASSET_DIR}}"
-    export RW_NODE_DIR="${WORK_DIR}"
-
-    if [[ ! -f "${XRAY_LOCATION_ASSET}/geoip.dat" || ! -f "${XRAY_LOCATION_ASSET}/geosite.dat" ]]; then
-        echo "[Entrypoint] WARNING: geoip.dat/geosite.dat missing in ${XRAY_LOCATION_ASSET}"
-    fi
-
-    echo "[Entrypoint] Starting rw-node-go..."
-    echo "[Entrypoint] Work directory: ${WORK_DIR}"
-    echo "[Entrypoint] NODE_PORT: ${NODE_PORT}"
-    echo "[Entrypoint] NODE_TLS_CLIENT_AUTH: ${NODE_TLS_CLIENT_AUTH}"
-    echo "[Entrypoint] INTERNAL_REST_PORT: ${INTERNAL_REST_PORT}"
-    echo "[Entrypoint] XRAY_LOCATION_ASSET: ${XRAY_LOCATION_ASSET}"
-
-    cd "${WORK_DIR}"
-    echo "$$" > "${NODE_PID_PATH}"
-    exec "${BIN_DIR}/rw-node-go"
-fi
-
-SUPERVISORD_USER="${SUPERVISORD_USER:-$(generate_random 64)}"
-SUPERVISORD_PASSWORD="${SUPERVISORD_PASSWORD:-$(generate_random 64)}"
-INTERNAL_REST_TOKEN="${INTERNAL_REST_TOKEN:-$(generate_random 64)}"
-RNDSTR="$(generate_random 10)"
-
-INTERNAL_SOCKET_PATH="${RUN_DIR}/remnawave-internal-${RNDSTR}.sock"
-SUPERVISORD_SOCKET_PATH="${RUN_DIR}/supervisord-${RNDSTR}.sock"
-SUPERVISORD_PID_PATH="${RUN_DIR}/supervisord-${RNDSTR}.pid"
-
-export SUPERVISORD_USER SUPERVISORD_PASSWORD INTERNAL_REST_TOKEN
-export INTERNAL_SOCKET_PATH SUPERVISORD_SOCKET_PATH SUPERVISORD_PID_PATH
-
-if ! SUPERVISORD_BIN=$(find_binary supervisord ""); then
-    echo "[Entrypoint] ERROR: supervisord binary not found"
-    exit 1
-fi
-
-if ! XRAY_BIN=$(find_binary rw-core ""); then
-    echo "[Entrypoint] ERROR: rw-core binary not found"
-    exit 1
-fi
-
-if ! NODE_BIN=$(find_binary node "${WORK_DIR}/node/bin/node"); then
-    echo "[Entrypoint] ERROR: node binary not found"
-    exit 1
-fi
-
+# ── 参数校验 ───────────────────────────────────────────────
 if [[ -z "${SECRET_KEY:-}" ]]; then
-    echo "[Entrypoint] ERROR: SECRET_KEY is required"
-    exit 1
+    fail "SECRET_KEY is required"
 fi
 
-echo "[Entrypoint] Starting..."
-echo "[Entrypoint] Work directory: ${WORK_DIR}"
-
-cat > "${CONF_DIR}/supervisord.conf" << EOF
-[supervisord]
-nodaemon=true
-user=root
-logfile=${LOG_DIR}/supervisord.log
-pidfile=${SUPERVISORD_PID_PATH}
-childlogdir=${LOG_DIR}
-logfile_maxbytes=5MB
-logfile_backups=2
-loglevel=info
-silent=true
-
-[unix_http_server]
-file=${SUPERVISORD_SOCKET_PATH}
-username=${SUPERVISORD_USER}
-password=${SUPERVISORD_PASSWORD}
-
-[rpcinterface:supervisor]
-supervisor.rpcinterface_factory=supervisor.rpcinterface:make_main_rpcinterface
-
-[program:xray]
-command=${XRAY_BIN} -config http+unix://${INTERNAL_SOCKET_PATH}/internal/get-config?token=${INTERNAL_REST_TOKEN} -format json
-environment=XRAY_LOCATION_ASSET="${ASSET_DIR}"
-autostart=false
-autorestart=false
-stderr_logfile=${LOG_DIR}/xray.err.log
-stdout_logfile=${LOG_DIR}/xray.out.log
-stdout_logfile_maxbytes=5MB
-stderr_logfile_maxbytes=5MB
-stdout_logfile_backups=0
-stderr_logfile_backups=0
-EOF
-
-echo "[Entrypoint] Config generated"
-
-"${SUPERVISORD_BIN}" -c "${CONF_DIR}/supervisord.conf" &
-SUPERVISORD_PID=$!
-
-if ! wait_for_socket "${SUPERVISORD_SOCKET_PATH}" "${SUPERVISORD_PID}"; then
-    echo "[Entrypoint] ERROR: Supervisord failed to start"
-    exit 1
+if [[ ! -x "${APP_BIN}" ]]; then
+    fail "rw-node-go binary not found: ${APP_BIN}"
 fi
 
-XRAY_CORE_VERSION=$("${XRAY_BIN}" version 2>/dev/null | head -n 1 || echo "unknown")
-export XRAY_CORE_VERSION
-export XTLS_API_PORT="${XTLS_API_PORT:-61000}"
-export XRAY_LOCATION_ASSET="${XRAY_LOCATION_ASSET:-${ASSET_DIR}}"
+if ! is_port "${NODE_PORT}"; then
+    fail "NODE_PORT must be a valid TCP port"
+fi
 
 if [[ ! -f "${XRAY_LOCATION_ASSET}/geoip.dat" || ! -f "${XRAY_LOCATION_ASSET}/geosite.dat" ]]; then
-    echo "[Entrypoint] WARNING: geoip.dat/geosite.dat missing in ${XRAY_LOCATION_ASSET}"
-    echo "[Entrypoint] Xray routing rules referencing geoip:*/geosite:* will fail to load."
-    echo "[Entrypoint] Re-run install.sh or place the files manually."
+    log "WARNING: geoip.dat/geosite.dat missing in ${XRAY_LOCATION_ASSET}"
+    log "Xray routing rules referencing geoip:*/geosite:* will fail to load."
+    log "Re-run install.sh or place the files manually."
 fi
 
-echo "[Entrypoint] Supervisord started"
-echo "[Entrypoint] Xray version: ${XRAY_CORE_VERSION}"
-echo "[Entrypoint] XTLS_API_PORT: ${XTLS_API_PORT}"
-echo "[Entrypoint] XRAY_LOCATION_ASSET: ${XRAY_LOCATION_ASSET}"
+# ── 进程管理 ───────────────────────────────────────────────
+app_pid=""
+caddy_pid=""
+watcher_pid=""
 
+terminate() {
+    trap - INT TERM
+
+    if [[ -n "${watcher_pid}" ]] && kill -0 "${watcher_pid}" 2>/dev/null; then
+        kill "${watcher_pid}" 2>/dev/null || true
+    fi
+
+    if [[ -n "${app_pid}" ]] && kill -0 "${app_pid}" 2>/dev/null; then
+        kill "${app_pid}" 2>/dev/null || true
+    fi
+
+    if [[ -n "${caddy_pid}" ]] && kill -0 "${caddy_pid}" 2>/dev/null; then
+        kill "${caddy_pid}" 2>/dev/null || true
+    fi
+
+    wait 2>/dev/null || true
+    rm -f "${WORK_DIR}/run/rw-node.pid" 2>/dev/null || true
+}
+
+trap terminate INT TERM
+
+# ── 启动信息 ───────────────────────────────────────────────
+log "Starting rw-node-go..."
+log "Work directory: ${WORK_DIR}"
+log "NODE_PORT: ${NODE_PORT}"
+log "NODE_TLS_CLIENT_AUTH: ${NODE_TLS_CLIENT_AUTH}"
+log "INTERNAL_REST_PORT: ${INTERNAL_REST_PORT}"
+log "XRAY_LOCATION_ASSET: ${XRAY_LOCATION_ASSET}"
+log "HTTP_FRONT_ENABLED: ${HTTP_FRONT_ENABLED}"
+
+# ── 写入 PID 文件 ─────────────────────────────────────────
+echo "$$" > "${WORK_DIR}/run/rw-node.pid"
+
+# ── 启动 Caddy HTTP 前置（可选）─────────────────────────────
+if [[ "${HTTP_FRONT_ENABLED}" == "true" ]]; then
+    start_caddy_front
+elif [[ "${HTTP_FRONT_ENABLED}" != "false" ]]; then
+    fail "HTTP_FRONT_ENABLED must be true or false"
+fi
+
+# ── 启动 rw-node-go ───────────────────────────────────────
 cd "${WORK_DIR}"
-echo "$$" > "${NODE_PID_PATH}"
-exec "${NODE_BIN}" dist/src/main
+"${APP_BIN}" &
+app_pid=$!
+
+# ── 启动 REALITY 动态分流 watcher（可选）─────────────────────
+if [[ "${HTTP_FRONT_ENABLED}" == "true" && "${REALITY_SPLIT_ENABLED}" == "true" ]]; then
+    start_reality_watcher "${CADDY_CONF_DIR}/Caddyfile" &
+    watcher_pid=$!
+fi
+
+# ── 等待子进程 ─────────────────────────────────────────────
+if [[ -n "${caddy_pid}" ]]; then
+    set +e
+    wait -n "${app_pid}" "${caddy_pid}"
+    status=$?
+    set -e
+else
+    set +e
+    wait "${app_pid}"
+    status=$?
+    set -e
+fi
+
+terminate
+exit "${status}"

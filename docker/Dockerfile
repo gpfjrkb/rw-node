@@ -1,103 +1,66 @@
-# 轻量版 Dockerfile - 使用 Go supervisord，无需 Python
-# 构建阶段 - 只在 amd64 上构建（JS 代码跨平台）
-FROM --platform=linux/amd64 node:24-alpine AS build
-WORKDIR /opt/app
-ARG UPSTREAM_REPO=remnawave/node
-ARG VERSION=main
+# Go implementation PaaS HTTPS direct Dockerfile.
+# Downloads rw-node-go release assets and starts the Caddy Layer 4 front.
+FROM alpine:3.23
 
-# 克隆源码并构建
-RUN apk add --no-cache git \
-    && git clone --depth 1 --single-branch --branch ${VERSION} https://github.com/${UPSTREAM_REPO}.git . \
-    && npm ci --legacy-peer-deps \
-    && npm run build \
-    && npm ci --omit=dev --legacy-peer-deps \
-    && npm cache clean --force \
-    # 清理 node_modules 中不必要的文件
-    && find node_modules -type f \( \
-        -name "*.md" -o -name "*.markdown" -o \
-        -name "*.ts" -o -name "*.map" -o \
-        -name "*.txt" -o -name "LICENSE*" -o \
-        -name "*.yml" -o -name "*.yaml" -o \
-        -name "Makefile" -o -name "*.mk" -o \
-        -name "*.editorconfig" -o -name "*.npmignore" -o \
-        -name "*.eslint*" -o -name "*.prettier*" -o \
-        -name "CHANGELOG*" -o -name "HISTORY*" -o \
-        -name "AUTHORS*" -o -name "CONTRIBUTORS*" \
-    \) -delete 2>/dev/null || true \
-    && find node_modules -type d \( \
-        -name "test" -o -name "tests" -o \
-        -name "example" -o -name "examples" -o \
-        -name "doc" -o -name "docs" -o \
-        -name ".github" -o -name "__tests__" \
-    \) -exec rm -rf {} + 2>/dev/null || true
-
-
-# 运行阶段
-FROM node:24-alpine
-
-ARG XRAY_CORE_VERSION=v25.12.8
-ARG SUPERVISORD_VERSION=0.7.3
+ARG RW_NODE_GO_REPO=x-dora/rw-node-go
+ARG RW_NODE_GO_VERSION=latest
 ARG TARGETARCH
 
 LABEL org.opencontainers.image.source="https://github.com/x-dora/rw-node"
-LABEL org.opencontainers.image.description="Remnawave Node - Lightweight (No Python, Go Supervisord)"
+LABEL org.opencontainers.image.description="Remnawave Node Go Implementation - PaaS HTTPS Direct"
 LABEL org.opencontainers.image.licenses="AGPL-3.0"
 
 WORKDIR /opt/rw-node
 
-# 复制构建产物（JS 代码跨平台，从 amd64 构建阶段复制）
-COPY --from=build /opt/app/dist ./dist
-COPY --from=build /opt/app/libs ./libs
-COPY --from=build /opt/app/node_modules ./node_modules
-COPY --from=build /opt/app/package*.json ./
-
-# 安装运行时依赖 + supervisord + xray-core（合并为一层）
 RUN set -ex; \
-    apk add --no-cache bash curl unzip; \
-    mkdir -p /usr/local/share/xray; \
-    \
-    # 安装 Go supervisord
+    apk add --no-cache bash busybox-extras ca-certificates curl jq tar unzip; \
     if [ "${TARGETARCH}" = "arm64" ]; then \
-        ARCH_NAME="ARM64"; \
-        XRAY_ARCH="arm64-v8a"; \
+        GO_ASSET="rw-node-go-linux-arm64-v8a.tar.gz"; \
     else \
-        ARCH_NAME="64-bit"; \
-        XRAY_ARCH="64"; \
+        GO_ASSET="rw-node-go-linux-64.tar.gz"; \
     fi; \
-    curl -fsSL "https://github.com/ochinchina/supervisord/releases/download/v${SUPERVISORD_VERSION}/supervisord_${SUPERVISORD_VERSION}_Linux_${ARCH_NAME}.tar.gz" -o /tmp/supervisord.tar.gz; \
-    tar -xzf /tmp/supervisord.tar.gz -C /tmp; \
-    mv /tmp/supervisord_${SUPERVISORD_VERSION}_Linux_${ARCH_NAME}/supervisord /usr/local/bin/; \
-    chmod +x /usr/local/bin/supervisord; \
-    \
-    # 直接下载 Xray-core（比官方脚本更精简）
-    curl -fsSL "https://github.com/XTLS/Xray-core/releases/download/${XRAY_CORE_VERSION}/Xray-linux-${XRAY_ARCH}.zip" -o /tmp/xray.zip; \
-    unzip -q /tmp/xray.zip -d /tmp/xray; \
-    mv /tmp/xray/xray /usr/local/bin/xray; \
-    chmod +x /usr/local/bin/xray; \
-    mv /tmp/xray/geo*.dat /usr/local/share/xray/ 2>/dev/null || true; \
-    ln -sf /usr/local/bin/xray /usr/local/bin/rw-core; \
-    \
-    # 创建辅助脚本
-    printf '#!/bin/bash\nset -euo pipefail\nWORK_DIR="${RW_NODE_DIR:-/opt/rw-node}"\ntail -n +1 -f "${WORK_DIR}/logs/xray.out.log"\n' > /usr/local/bin/xlogs; \
-    printf '#!/bin/bash\nset -euo pipefail\nWORK_DIR="${RW_NODE_DIR:-/opt/rw-node}"\ntail -n +1 -f "${WORK_DIR}/logs/xray.err.log"\n' > /usr/local/bin/xerrors; \
-    chmod +x /usr/local/bin/xlogs /usr/local/bin/xerrors; \
-    \
-    # 清理
+    if [ "${RW_NODE_GO_VERSION}" = "latest" ]; then \
+        RW_NODE_GO_VERSION="$(curl -fsSL "https://api.github.com/repos/${RW_NODE_GO_REPO}/releases/latest" | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"; \
+    fi; \
+    test -n "${RW_NODE_GO_VERSION}"; \
+    curl -fsSL "https://github.com/${RW_NODE_GO_REPO}/releases/download/${RW_NODE_GO_VERSION}/${GO_ASSET}" -o /tmp/rw-node-go.tar.gz; \
+    mkdir -p /tmp/rw-node-go /usr/local/share/xray /opt/rw-node/default-www; \
+    curl -fsSL "https://caddyserver.com/api/download?os=linux&arch=${TARGETARCH}&p=github.com/mholt/caddy-l4" \
+      -o /usr/local/bin/caddy; \
+    chmod 755 /usr/local/bin/caddy; \
+    tar -xzf /tmp/rw-node-go.tar.gz -C /tmp/rw-node-go; \
+    install -m 755 /tmp/rw-node-go/rw-node-go /usr/local/bin/rw-node-go; \
+    install -m 644 /tmp/rw-node-go/geoip.dat /usr/local/share/xray/geoip.dat; \
+    install -m 644 /tmp/rw-node-go/geosite.dat /usr/local/share/xray/geosite.dat; \
+    if curl -fsSL --retry 3 --connect-timeout 10 --max-time 60 "https://github.com/AYJCSGM/mikutap/archive/master.zip" -o /tmp/default-www.zip \
+        && unzip -q /tmp/default-www.zip -d /tmp/default-www \
+        && index_file="$(find /tmp/default-www -mindepth 1 -maxdepth 4 -type f -iname index.html | sort | head -n 1)" \
+        && [ -n "${index_file}" ]; then \
+        site_dir="$(dirname "${index_file}")"; \
+        cp -a "${site_dir}/." /opt/rw-node/default-www/; \
+    else \
+        printf '%s\n' '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Welcome</title></head><body><main><h1>Welcome</h1><p>The service is running.</p></main></body></html>' > /opt/rw-node/default-www/index.html; \
+    fi; \
+    printf '%s\n' "${RW_NODE_GO_VERSION}" > /opt/rw-node/.rw-node-go-version; \
     rm -rf /tmp/* /var/cache/apk/*
 
-# 复制 entrypoint
-COPY docker-entrypoint.sh /usr/local/bin/
+COPY docker/docker-entrypoint.sh /usr/local/bin/
+COPY lib/ /usr/local/lib/rw-node/
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
-# 环境变量
-ENV NODE_ENV=production
-ENV NODE_OPTIONS="--max-http-header-size=65536"
+ENV REQUIRE_SECRET_KEY=true
+ENV NODE_PORT=2222
+ENV NODE_TLS_CLIENT_AUTH=mtls
+ENV INTERNAL_REST_PORT=61001
 ENV RW_NODE_DIR=/opt/rw-node
-ENV XTLS_API_PORT=61000
+ENV XRAY_LOCATION_ASSET=/usr/local/share/xray
+ENV HTTP_FRONT_ENABLED=true
+ENV XHTTP_UPSTREAM_PORT=8080
+ENV WS_UPSTREAM_PORT=8880
 
-# 健康检查
+EXPOSE 3000
+
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD bash -c "</dev/tcp/127.0.0.1/${NODE_PORT:-2222}" || exit 1
+    CMD bash -c 'if [[ "${HTTP_FRONT_ENABLED:-true}" == "true" ]]; then CHECK_PORT="${HTTP_FRONT_PORT:-${PORT:-3000}}"; elif [[ -n "${PORT:-}" ]]; then CHECK_PORT="${PORT}"; else CHECK_PORT="${NODE_PORT:-2222}"; fi; </dev/tcp/127.0.0.1/${CHECK_PORT}' || exit 1
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
-CMD ["node", "dist/src/main"]

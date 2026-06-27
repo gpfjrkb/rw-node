@@ -6,17 +6,17 @@
     {
       "customType": "regex",
       "managerFilePatterns": [
-        "/^\\.upstream-version$/"
+        "/^\\.go-paas-version$/"
       ],
       "matchStrings": ["(?<currentValue>.+?)\\s*$"],
       "datasourceTemplate": "github-releases",
-      "depNameTemplate": "remnawave/node",
+      "depNameTemplate": "x-dora/rw-node-go",
       "versioningTemplate": "semver"
     }
   ],
   "packageRules": [
     {
-      "matchDepNames": ["remnawave/node"],
+      "matchDepNames": ["x-dora/rw-node-go"],
       "automerge": true,
       "automergeType": "pr",
       "commitMessageTopic": "upstream {{depName}}",

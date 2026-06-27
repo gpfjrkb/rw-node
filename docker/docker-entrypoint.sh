@@ -2,134 +2,130 @@
 
 set -euo pipefail
 
+APP_BIN="/usr/local/bin/rw-node-go"
 WORK_DIR="${RW_NODE_DIR:-/opt/rw-node}"
-LOG_DIR="${WORK_DIR}/logs"
-RUN_DIR="${WORK_DIR}/run"
 CONF_DIR="${WORK_DIR}/conf"
-NODE_PID_PATH="${RUN_DIR}/rw-node.pid"
+CADDY_CONF_DIR="${CONF_DIR}/caddy"
+CADDY_SITE_DIR="${CADDY_SITE_DIR:-${WORK_DIR}/www}"
+CADDY_DEFAULT_SITE_DIR="${CADDY_DEFAULT_SITE_DIR:-/opt/rw-node/default-www}"
+CADDY_BIN="${CADDY_BIN:-$(command -v caddy 2>/dev/null || true)}"
+CADDY_ADMIN_SOCK="/tmp/caddy-admin.sock"
+LOG_PREFIX="[Go PaaS]"
 
-mkdir -p "${LOG_DIR}" "${RUN_DIR}" "${CONF_DIR}"
+RW_NODE_LIB_DIR="${RW_NODE_LIB_DIR:-/usr/local/lib/rw-node}"
+# shellcheck source=../lib/core.sh
+source "${RW_NODE_LIB_DIR}/core.sh"
+# shellcheck source=../lib/caddy.sh
+source "${RW_NODE_LIB_DIR}/caddy.sh"
 
-rm -f "${RUN_DIR}"/remnawave-internal-*.sock 2>/dev/null || true
-rm -f "${RUN_DIR}"/supervisord-*.sock 2>/dev/null || true
-rm -f "${RUN_DIR}"/supervisord-*.pid 2>/dev/null || true
-rm -f "${NODE_PID_PATH}" 2>/dev/null || true
+NODE_PORT="${NODE_PORT:-2222}"
+NODE_TLS_CLIENT_AUTH="${NODE_TLS_CLIENT_AUTH:-mtls}"
+INTERNAL_REST_PORT="${INTERNAL_REST_PORT:-61001}"
+REQUIRE_SECRET_KEY="${REQUIRE_SECRET_KEY:-true}"
+RW_NODE_DIR="${WORK_DIR}"
+XRAY_LOCATION_ASSET="${XRAY_LOCATION_ASSET:-/usr/local/share/xray}"
+HTTP_FRONT_ENABLED="${HTTP_FRONT_ENABLED:-true}"
+HTTP_FRONT_PORT="${HTTP_FRONT_PORT:-${PORT:-3000}}"
+CADDY_HTTP_PORT=$((HTTP_FRONT_PORT + 1))
+XHTTP_UPSTREAM_PORT="${XHTTP_UPSTREAM_PORT:-8080}"
+WS_UPSTREAM_PORT="${WS_UPSTREAM_PORT:-8880}"
+CADDY_INDEX_PAGE="${CADDY_INDEX_PAGE:-${CADDYIndexPage:-mikutap}}"
+REALITY_SPLIT_ENABLED="${REALITY_SPLIT_ENABLED:-true}"
+REALITY_SPLIT_INTERVAL="${REALITY_SPLIT_INTERVAL:-15}"
 
-generate_random() {
-    local length="${1:-64}"
-    local value
+app_pid=""
+health_pid=""
+caddy_pid=""
+watcher_pid=""
 
-    set +o pipefail
-    value=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c "$length")
-    set -o pipefail
-    printf '%s' "$value"
+terminate() {
+    trap - INT TERM
+
+    if [[ -n "${watcher_pid}" ]] && kill -0 "${watcher_pid}" 2>/dev/null; then
+        kill "${watcher_pid}" 2>/dev/null || true
+    fi
+
+    if [[ -n "${app_pid}" ]] && kill -0 "${app_pid}" 2>/dev/null; then
+        kill "${app_pid}" 2>/dev/null || true
+    fi
+
+    if [[ -n "${health_pid}" ]] && kill -0 "${health_pid}" 2>/dev/null; then
+        kill "${health_pid}" 2>/dev/null || true
+    fi
+
+    if [[ -n "${caddy_pid}" ]] && kill -0 "${caddy_pid}" 2>/dev/null; then
+        kill "${caddy_pid}" 2>/dev/null || true
+    fi
+
+    wait 2>/dev/null || true
 }
 
-wait_for_socket() {
-    local socket_path="$1"
-    local pid="$2"
-    local i
+start_health_server() {
+    if [[ -z "${PORT:-}" ]]; then
+        return 0
+    fi
 
-    for i in 1 2 3 4 5 6 7 8 9 10; do
-        if [[ -S "$socket_path" ]]; then
-            return 0
-        fi
-        if ! kill -0 "$pid" 2>/dev/null; then
-            return 1
-        fi
-        sleep 1
-    done
+    if ! is_port "${PORT}"; then
+        fail "PORT must be a valid TCP port"
+    fi
 
-    return 1
+    if [[ "${PORT}" == "${NODE_PORT}" ]]; then
+        log "PORT equals NODE_PORT; skipping auxiliary HTTP health server"
+        return 0
+    fi
+
+    log "Starting auxiliary HTTP health server on port ${PORT}"
+    printf 'ok\n' > /tmp/index.html
+    busybox httpd -f -p "0.0.0.0:${PORT}" -h /tmp &
+    health_pid=$!
 }
 
-if [[ -z "${SECRET_KEY:-}" ]]; then
-    echo "[Entrypoint] ERROR: SECRET_KEY is required"
-    exit 1
+trap terminate INT TERM
+
+if ! is_port "${NODE_PORT}"; then
+    fail "NODE_PORT must be a valid TCP port"
 fi
 
-if [[ ! -f "${WORK_DIR}/dist/src/main" && ! -f "${WORK_DIR}/dist/src/main.js" ]]; then
-    echo "[Entrypoint] ERROR: application entrypoint is missing in ${WORK_DIR}"
-    find "${WORK_DIR}/dist" -maxdepth 3 -type f 2>/dev/null | sort | head -50 || true
-    exit 1
+export NODE_PORT NODE_TLS_CLIENT_AUTH INTERNAL_REST_PORT REQUIRE_SECRET_KEY RW_NODE_DIR XRAY_LOCATION_ASSET
+
+if [[ ! -x "${APP_BIN}" ]]; then
+    fail "rw-node-go binary not found"
 fi
 
-SUPERVISORD_USER="${SUPERVISORD_USER:-$(generate_random 64)}"
-SUPERVISORD_PASSWORD="${SUPERVISORD_PASSWORD:-$(generate_random 64)}"
-INTERNAL_REST_TOKEN="${INTERNAL_REST_TOKEN:-$(generate_random 64)}"
-RNDSTR="$(generate_random 10)"
-
-INTERNAL_SOCKET_PATH="${RUN_DIR}/remnawave-internal-${RNDSTR}.sock"
-SUPERVISORD_SOCKET_PATH="${RUN_DIR}/supervisord-${RNDSTR}.sock"
-SUPERVISORD_PID_PATH="${RUN_DIR}/supervisord-${RNDSTR}.pid"
-
-export SUPERVISORD_USER SUPERVISORD_PASSWORD INTERNAL_REST_TOKEN
-export INTERNAL_SOCKET_PATH SUPERVISORD_SOCKET_PATH SUPERVISORD_PID_PATH
-
-SUPERVISORD_BIN="/usr/local/bin/supervisord"
-XRAY_BIN="/usr/local/bin/rw-core"
-
-export NODE_PORT="${NODE_PORT:-2222}"
-export XTLS_API_PORT="${XTLS_API_PORT:-61000}"
-
-echo "[Entrypoint] Starting..."
-echo "[Entrypoint] Work directory: ${WORK_DIR}"
-
-cat > "${CONF_DIR}/supervisord.conf" << EOF
-[supervisord]
-nodaemon=true
-user=root
-logfile=${LOG_DIR}/supervisord.log
-pidfile=${SUPERVISORD_PID_PATH}
-childlogdir=${LOG_DIR}
-logfile_maxbytes=5MB
-logfile_backups=2
-loglevel=info
-silent=true
-
-[unix_http_server]
-file=${SUPERVISORD_SOCKET_PATH}
-username=${SUPERVISORD_USER}
-password=${SUPERVISORD_PASSWORD}
-
-[rpcinterface:supervisor]
-supervisor.rpcinterface_factory=supervisor.rpcinterface:make_main_rpcinterface
-
-[program:xray]
-command=${XRAY_BIN} -config http+unix://${INTERNAL_SOCKET_PATH}/internal/get-config?token=${INTERNAL_REST_TOKEN} -format json
-autostart=false
-autorestart=false
-stderr_logfile=${LOG_DIR}/xray.err.log
-stdout_logfile=${LOG_DIR}/xray.out.log
-stdout_logfile_maxbytes=5MB
-stderr_logfile_maxbytes=5MB
-stdout_logfile_backups=0
-stderr_logfile_backups=0
-EOF
-
-echo "[Entrypoint] Config generated"
-
-"${SUPERVISORD_BIN}" -c "${CONF_DIR}/supervisord.conf" &
-SUPERVISORD_PID=$!
-
-if ! wait_for_socket "${SUPERVISORD_SOCKET_PATH}" "${SUPERVISORD_PID}"; then
-    echo "[Entrypoint] ERROR: Supervisord failed to start"
-    exit 1
+mkdir -p "${WORK_DIR}"
+if [[ "${HTTP_FRONT_ENABLED}" == "true" ]]; then
+    start_caddy_front
+elif [[ "${HTTP_FRONT_ENABLED}" == "false" ]]; then
+    start_health_server
+else
+    fail "HTTP_FRONT_ENABLED must be true or false"
 fi
-
-XRAY_CORE_VERSION=$("${XRAY_BIN}" version 2>/dev/null | head -n 1 || echo "unknown")
-export XRAY_CORE_VERSION
-
-echo "[Entrypoint] Supervisord started"
-echo "[Entrypoint] Xray version: ${XRAY_CORE_VERSION}"
-echo "[Entrypoint] XTLS_API_PORT: ${XTLS_API_PORT}"
 
 cd "${WORK_DIR}"
-echo "$$" > "${NODE_PID_PATH}"
+"${APP_BIN}" &
+app_pid=$!
 
-if [[ $# -eq 0 ]]; then
-    set -- node dist/src/main
+if [[ "${HTTP_FRONT_ENABLED}" == "true" && "${REALITY_SPLIT_ENABLED}" == "true" ]]; then
+    start_reality_watcher "${CONF_DIR}/caddy/Caddyfile" &
+    watcher_pid=$!
 fi
 
-echo "[Entrypoint] Executing: $*"
-exec "$@"
+if [[ -n "${caddy_pid}" ]]; then
+    set +e
+    wait -n "${app_pid}" "${caddy_pid}"
+    status=$?
+    set -e
+elif [[ -n "${health_pid}" ]]; then
+    set +e
+    wait -n "${app_pid}" "${health_pid}"
+    status=$?
+    set -e
+else
+    set +e
+    wait "${app_pid}"
+    status=$?
+    set -e
+fi
+
+terminate
+exit "${status}"
