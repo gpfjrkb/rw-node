@@ -101,6 +101,11 @@ def generate_caddy_config(reality_snis: str, reality_port: str) -> str:
 
     log {{
         level WARN
+        exclude http.handlers.reverse_proxy
+    }}
+    log reverse-proxy {{
+        level ERROR
+        include http.handlers.reverse_proxy
     }}
 
 {layer4}
@@ -201,15 +206,15 @@ def wait_for_port(port: int, max_wait: int = 120) -> None:
             time.sleep(1)
 
 
-def main() -> int:
-    if len(sys.argv) < 2:
-        print(
-            f"{LOG_PREFIX} ERROR: reality-watcher.py requires config_path argument",
-            file=sys.stderr,
-        )
-        return 1
-
-    config_path = sys.argv[1]
+def main(config_path=None) -> int:
+    if config_path is None:
+        if len(sys.argv) < 2:
+            print(
+                f"{LOG_PREFIX} ERROR: reality-watcher.py requires config_path argument",
+                file=sys.stderr,
+            )
+            return 1
+        config_path = sys.argv[1]
     wait_for_port(int(INTERNAL_REST_PORT))
 
     prev_hash = ""

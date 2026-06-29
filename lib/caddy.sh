@@ -370,6 +370,11 @@ write_caddy_config() {
 
     log {
         level WARN
+        exclude http.handlers.reverse_proxy
+    }
+    log reverse-proxy {
+        level ERROR
+        include http.handlers.reverse_proxy
     }
 
 $(write_caddy_layer4_block "${reality_snis}" "${reality_port}")
