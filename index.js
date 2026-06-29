@@ -35,6 +35,12 @@ function loadEnvFile(filePath) {
 
 loadEnvFile(path.join(ROOT_DIR, '.env'));
 
+if (!process.env.HTTP_FRONT_PORT) {
+  process.env.HTTP_FRONT_PORT = process.env.PORT || '3000';
+}
+if (!process.env.CADDY_HTTP_PORT) {
+  process.env.CADDY_HTTP_PORT = String(parseInt(process.env.HTTP_FRONT_PORT, 10) + 1);
+}
 if (!process.env.CADDY_ADMIN_SOCK) {
   process.env.CADDY_ADMIN_SOCK = path.join(INSTALL_DIR, 'caddy', 'admin.sock');
 }
