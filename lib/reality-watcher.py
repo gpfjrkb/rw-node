@@ -65,7 +65,11 @@ def generate_caddy_config(reality_snis: str, reality_port: str) -> str:
     with open(template_path) as f:
         content = f.read()
 
-    admin_line = f"admin unix/{CADDY_ADMIN_SOCK}"
+    admin_line = (
+        f"admin unix/{CADDY_ADMIN_SOCK}"
+        if os.environ.get("REALITY_SPLIT_ENABLED", "true") != "false"
+        else "admin off"
+    )
     reality_block = ""
     if reality_snis and reality_port:
         reality_block = "\n".join([

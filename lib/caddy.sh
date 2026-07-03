@@ -367,38 +367,23 @@ extract_reality_config_jq() {
 }
 
 _detect_reality_watcher_backend() {
-    local starter_runtime="${STARTER_RUNTIME:-}"
-
-    if [[ -n "${starter_runtime}" ]]; then
-        case "${starter_runtime}" in
-            node)
-                if command -v node >/dev/null 2>&1; then
-                    printf 'node'
-                    return 0
-                fi
-                ;;
-            python)
-                if command -v python3 >/dev/null 2>&1; then
-                    printf 'python'
-                    return 0
-                fi
-                ;;
-        esac
+    local preferred="${STARTER_RUNTIME:-}"
+    if [[ -n "${preferred}" ]]; then
+        local bin="${preferred}"
+        [[ "${bin}" != "python" ]] || bin="python3"
+        if command -v "${bin}" >/dev/null 2>&1; then
+            printf '%s' "${preferred}"
+            return 0
+        fi
     fi
 
-    if command -v jq >/dev/null 2>&1; then
-        printf 'jq'
-        return 0
-    fi
-    if command -v node >/dev/null 2>&1; then
-        printf 'node'
-        return 0
-    fi
-    if command -v python3 >/dev/null 2>&1; then
-        printf 'python'
-        return 0
-    fi
-
+    local cmd
+    for cmd in jq node python3; do
+        if command -v "${cmd}" >/dev/null 2>&1; then
+            [[ "${cmd}" != "python3" ]] && printf '%s' "${cmd}" || printf 'python'
+            return 0
+        fi
+    done
     return 1
 }
 
