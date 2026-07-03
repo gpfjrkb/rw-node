@@ -520,8 +520,8 @@ start_caddy_front() {
     caddy_pid=$!
 
     if [[ -z "${CADDY_SKIP_PORT_WAIT:-}" ]]; then
-        if ! wait_for_port "${HTTP_FRONT_PORT}" "${caddy_pid}"; then
-            log "ERROR: Caddy did not accept TCP connections on 127.0.0.1:${HTTP_FRONT_PORT}"
+        if ! wait_for_health "${HTTP_FRONT_PORT}" "${caddy_pid}"; then
+            log "ERROR: Caddy health endpoint not responding on 127.0.0.1:${HTTP_FRONT_PORT}/health"
             return 1
         fi
     fi

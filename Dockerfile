@@ -61,6 +61,6 @@ ENV WS_UPSTREAM_PORT=8880
 EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD bash -c 'if [[ "${HTTP_FRONT_ENABLED:-true}" == "true" ]]; then CHECK_PORT="${HTTP_FRONT_PORT:-${PORT:-3000}}"; elif [[ -n "${PORT:-}" ]]; then CHECK_PORT="${PORT}"; else CHECK_PORT="${NODE_PORT:-2222}"; fi; </dev/tcp/127.0.0.1/${CHECK_PORT}' || exit 1
+    CMD bash -c 'if [[ "${HTTP_FRONT_ENABLED:-true}" == "true" ]]; then curl -sf --max-time 5 http://127.0.0.1:${HTTP_FRONT_PORT:-${PORT:-3000}}/health; elif [[ -n "${PORT:-}" ]]; then </dev/tcp/127.0.0.1/${PORT}; else </dev/tcp/127.0.0.1/${NODE_PORT:-2222}; fi' || exit 1
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

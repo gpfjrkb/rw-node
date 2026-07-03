@@ -175,6 +175,22 @@ wait_for_port() {
   return 1
 }
 
+wait_for_health() {
+  local port="$1"
+  local pid="${2:-}"
+
+  for _ in $(seq 1 50); do
+    if [[ -n "${pid}" ]] && ! kill -0 "${pid}" 2>/dev/null; then
+      return 1
+    fi
+    if curl -sf --max-time 1 "http://127.0.0.1:${port}/health" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  return 1
+}
+
 canonical_path() {
   local path="$1"
   if [[ -d "${path}" ]]; then
