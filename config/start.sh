@@ -28,6 +28,7 @@ mkdir -p "${WORK_DIR}/bin" "${WORK_DIR}/logs" "${WORK_DIR}/run" \
 # ── 清理上一次运行遗留的运行时文件 ──────────────────────────
 rm -f "${WORK_DIR}/run"/*.sock 2>/dev/null || true
 rm -f "${WORK_DIR}/run"/*.pid 2>/dev/null || true
+rm -f /tmp/caddy-http.sock /tmp/caddy-admin.sock 2>/dev/null || true
 
 # ── 加载环境变量 ───────────────────────────────────────────
 load_env_file "${WORK_DIR}/.env"
@@ -41,7 +42,7 @@ REQUIRE_SECRET_KEY="${REQUIRE_SECRET_KEY:-true}"
 RW_NODE_DIR="${WORK_DIR}"
 HTTP_FRONT_ENABLED="${HTTP_FRONT_ENABLED:-false}"
 HTTP_FRONT_PORT="${HTTP_FRONT_PORT:-${PORT:-3000}}"
-CADDY_HTTP_PORT=$((HTTP_FRONT_PORT + 1))
+CADDY_HTTP_SOCK="${CADDY_HTTP_SOCK:-/tmp/caddy-http.sock}"
 XHTTP_UPSTREAM_PORT="${XHTTP_UPSTREAM_PORT:-8080}"
 WS_UPSTREAM_PORT="${WS_UPSTREAM_PORT:-8880}"
 CADDY_INDEX_PAGE="${CADDY_INDEX_PAGE:-${CADDYIndexPage:-mikutap}}"

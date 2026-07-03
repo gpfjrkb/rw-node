@@ -26,7 +26,7 @@ RW_NODE_DIR="${WORK_DIR}"
 XRAY_LOCATION_ASSET="${XRAY_LOCATION_ASSET:-/usr/local/share/xray}"
 HTTP_FRONT_ENABLED="${HTTP_FRONT_ENABLED:-true}"
 HTTP_FRONT_PORT="${HTTP_FRONT_PORT:-${PORT:-3000}}"
-CADDY_HTTP_PORT=$((HTTP_FRONT_PORT + 1))
+CADDY_HTTP_SOCK="${CADDY_HTTP_SOCK:-/tmp/caddy-http.sock}"
 XHTTP_UPSTREAM_PORT="${XHTTP_UPSTREAM_PORT:-8080}"
 WS_UPSTREAM_PORT="${WS_UPSTREAM_PORT:-8880}"
 CADDY_INDEX_PAGE="${CADDY_INDEX_PAGE:-${CADDYIndexPage:-mikutap}}"
@@ -93,6 +93,7 @@ if [[ ! -x "${APP_BIN}" ]]; then
 fi
 
 mkdir -p "${WORK_DIR}"
+rm -f "${CADDY_HTTP_SOCK}" "${CADDY_ADMIN_SOCK}"
 if [[ "${HTTP_FRONT_ENABLED}" == "true" ]]; then
     start_caddy_front
 elif [[ "${HTTP_FRONT_ENABLED}" == "false" ]]; then

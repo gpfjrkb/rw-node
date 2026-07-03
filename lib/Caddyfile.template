@@ -20,17 +20,21 @@ ${REALITY_ROUTE_BLOCK}
                 proxy 127.0.0.1:${NODE_PORT}
             }
             route {
-                proxy 127.0.0.1:${CADDY_HTTP_PORT}
+                proxy unix/${CADDY_HTTP_SOCK}
             }
         }
     }
 
-    servers :${CADDY_HTTP_PORT} {
+    servers unix/${CADDY_HTTP_SOCK} {
         protocols h1
+        timeouts {
+            idle 30s
+        }
+        max_header_size 32KB
     }
 }
 
-http://:${CADDY_HTTP_PORT} {
+http://unix/${CADDY_HTTP_SOCK} {
     handle /health {
         respond "ok" 200
     }

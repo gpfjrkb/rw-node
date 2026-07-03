@@ -16,7 +16,7 @@ CADDY_BIN = os.environ.get("CADDY_BIN", "caddy")
 REALITY_SPLIT_INTERVAL = int(os.environ.get("REALITY_SPLIT_INTERVAL", "15"))
 HTTP_FRONT_PORT = os.environ.get("HTTP_FRONT_PORT", "3000")
 NODE_PORT = os.environ.get("NODE_PORT", "2222")
-CADDY_HTTP_PORT = os.environ.get("CADDY_HTTP_PORT", str(int(HTTP_FRONT_PORT) + 1))
+CADDY_HTTP_SOCK = os.environ.get("CADDY_HTTP_SOCK", "/tmp/caddy-http.sock")
 XHTTP_UPSTREAM_PORT = os.environ.get("XHTTP_UPSTREAM_PORT", "8080")
 WS_UPSTREAM_PORT = os.environ.get("WS_UPSTREAM_PORT", "8880")
 CADDY_SITE_DIR = os.environ.get("CADDY_SITE_DIR", "")
@@ -79,7 +79,7 @@ def generate_caddy_config(reality_snis: str, reality_port: str) -> str:
         "${REALITY_ROUTE_BLOCK}": reality_block,
         "${HTTP_FRONT_PORT}": HTTP_FRONT_PORT,
         "${NODE_PORT}": NODE_PORT,
-        "${CADDY_HTTP_PORT}": CADDY_HTTP_PORT,
+        "${CADDY_HTTP_SOCK}": CADDY_HTTP_SOCK,
         "${XHTTP_UPSTREAM_PORT}": XHTTP_UPSTREAM_PORT,
         "${WS_UPSTREAM_PORT}": WS_UPSTREAM_PORT,
         "${CADDY_SITE_DIR}": CADDY_SITE_DIR,
