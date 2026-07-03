@@ -20,7 +20,7 @@ RUN set -ex; \
         GO_ASSET="rw-node-go-linux-64.tar.gz"; \
     fi; \
     if [ "${RW_NODE_GO_VERSION}" = "latest" ]; then \
-        RW_NODE_GO_VERSION="$(curl -fsSL "https://api.github.com/repos/${RW_NODE_GO_REPO}/releases/latest" | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"; \
+        RW_NODE_GO_VERSION="$(curl -fsSL "https://api.github.com/repos/${RW_NODE_GO_REPO}/releases/latest" | jq -r '.tag_name')"; \
     fi; \
     test -n "${RW_NODE_GO_VERSION}"; \
     curl -fsSL "https://github.com/${RW_NODE_GO_REPO}/releases/download/${RW_NODE_GO_VERSION}/${GO_ASSET}" -o /tmp/rw-node-go.tar.gz; \
@@ -44,7 +44,7 @@ RUN set -ex; \
     printf '%s\n' "${RW_NODE_GO_VERSION}" > /opt/rw-node/.rw-node-go-version; \
     rm -rf /tmp/* /var/cache/apk/*
 
-COPY docker/docker-entrypoint.sh /usr/local/bin/
+COPY docker-entrypoint.sh /usr/local/bin/
 COPY lib/ /usr/local/lib/rw-node/
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 

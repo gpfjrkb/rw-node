@@ -104,7 +104,7 @@ load_env_file() {
 
 set_default_env() {
   [[ -v NODE_PORT ]]              || NODE_PORT=2222
-  [[ -v NODE_TLS_CLIENT_AUTH ]]   || NODE_TLS_CLIENT_AUTH=none
+  [[ -v NODE_TLS_CLIENT_AUTH ]]   || NODE_TLS_CLIENT_AUTH=mtls
   [[ -v INTERNAL_REST_PORT ]]     || INTERNAL_REST_PORT=61001
   [[ -v REQUIRE_SECRET_KEY ]]     || REQUIRE_SECRET_KEY=true
   [[ -v RW_NODE_DIR ]]            || RW_NODE_DIR="${RW_NODE_DIR_DEFAULT:-.}"
@@ -210,30 +210,7 @@ detect_cloudflared_asset_name() {
   esac
 }
 
-inspect_env_if_requested() {
-  [[ "${RW_NODE_STARTER_INSPECT_ENV:-}" == "1" ]] || return 0
-  printf 'NODE_PORT=%s\n' "$NODE_PORT"
-  printf 'NODE_TLS_CLIENT_AUTH=%s\n' "$NODE_TLS_CLIENT_AUTH"
-  printf 'INTERNAL_REST_PORT=%s\n' "$INTERNAL_REST_PORT"
-  printf 'REQUIRE_SECRET_KEY=%s\n' "$REQUIRE_SECRET_KEY"
-  printf 'RW_NODE_DIR=%s\n' "$RW_NODE_DIR"
-  printf 'XRAY_LOCATION_ASSET=%s\n' "$XRAY_LOCATION_ASSET"
-  printf 'HTTP_FRONT_PORT=%s\n' "$HTTP_FRONT_PORT"
-  printf 'XHTTP_UPSTREAM_PORT=%s\n' "$XHTTP_UPSTREAM_PORT"
-  printf 'WS_UPSTREAM_PORT=%s\n' "$WS_UPSTREAM_PORT"
-  printf 'CADDY_HTTP_SOCK=%s\n' "$CADDY_HTTP_SOCK"
-  printf 'CADDY_HTTP_PORT=%s\n' "$CADDY_HTTP_PORT"
-  printf 'HTTP_FRONT_ENABLED=%s\n' "$HTTP_FRONT_ENABLED"
-  printf 'CADDY_INDEX_PAGE=%s\n' "$CADDY_INDEX_PAGE"
-  printf 'REALITY_SPLIT_ENABLED=%s\n' "$REALITY_SPLIT_ENABLED"
-  printf 'REALITY_SPLIT_INTERVAL=%s\n' "$REALITY_SPLIT_INTERVAL"
-  printf 'ARGO_TOKEN_SET=%s\n' "$([[ -n "${ARGO_TOKEN:-}" ]] && printf 'true' || printf 'false')"
-  printf 'ARGO_LOG_LEVEL=%s\n' "$ARGO_LOG_LEVEL"
-  exit 0
-}
-
-dry_run_if_requested() {
-  [[ -n "${RW_NODE_STARTER_DRY_RUN_EXIT:-}" ]] || return 0
-  [[ "$RW_NODE_STARTER_DRY_RUN_EXIT" =~ ^[0-9]+$ ]] || fail "RW_NODE_STARTER_DRY_RUN_EXIT must be numeric"
-  exit "$RW_NODE_STARTER_DRY_RUN_EXIT"
+kill_if_running() {
+  local pid="${!1:-}"
+  [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null && kill "${pid}" 2>/dev/null || true
 }
