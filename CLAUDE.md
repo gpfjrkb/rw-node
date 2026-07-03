@@ -98,7 +98,7 @@ shellcheck lib/*.sh config/start.sh docker-entrypoint.sh scripts/*.sh
 
 ## 环境变量
 
-工作目录默认 `/opt/rw-node`，可通过 `RW_NODE_DIR` 自定义。核心变量：`NODE_PORT`（默认 2222）、`SECRET_KEY`（必填）、`INTERNAL_REST_PORT`（默认 61001）。
+工作目录默认 `/opt/rw-node`，可通过 `RW_NODE_DIR` 自定义。核心变量：`NODE_PORT`（默认 2222）、`SECRET_KEY`（必填）、`INTERNAL_REST_PORT`（默认 61001）。`SECRET_KEY` 支持分片拼接：当平台限制环境变量长度时，可设置 `SECRET_KEY_1`、`SECRET_KEY_2`、`SECRET_KEY_3` …，`set_default_env()` 会自动按序号拼接为 `SECRET_KEY`。
 
 PaaS 版额外变量：
 

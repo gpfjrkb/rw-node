@@ -102,7 +102,28 @@ load_env_file() {
   done < "$env_file"
 }
 
+resolve_secret_key() {
+  if [[ -v SECRET_KEY && -n "${SECRET_KEY}" ]]; then
+    return 0
+  fi
+
+  if [[ ! -v SECRET_KEY_1 ]]; then
+    return 0
+  fi
+
+  SECRET_KEY=""
+  local i=1 part_name
+  while true; do
+    part_name="SECRET_KEY_${i}"
+    [[ -v "${part_name}" ]] || break
+    SECRET_KEY+="${!part_name}"
+    i=$((i + 1))
+  done
+  export SECRET_KEY
+}
+
 set_default_env() {
+  resolve_secret_key
   [[ -v NODE_PORT ]]              || NODE_PORT=2222
   [[ -v NODE_TLS_CLIENT_AUTH ]]   || NODE_TLS_CLIENT_AUTH=mtls
   [[ -v INTERNAL_REST_PORT ]]     || INTERNAL_REST_PORT=61001
