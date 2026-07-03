@@ -337,6 +337,7 @@ write_caddy_config() {
     content="${content//\$\{HTTP_FRONT_PORT\}/${HTTP_FRONT_PORT}}"
     content="${content//\$\{NODE_PORT\}/${NODE_PORT}}"
     content="${content//\$\{CADDY_HTTP_SOCK\}/${CADDY_HTTP_SOCK}}"
+    content="${content//\$\{CADDY_HTTP_PORT\}/${CADDY_HTTP_PORT}}"
     content="${content//\$\{XHTTP_UPSTREAM_PORT\}/${XHTTP_UPSTREAM_PORT}}"
     content="${content//\$\{WS_UPSTREAM_PORT\}/${WS_UPSTREAM_PORT}}"
     content="${content//\$\{CADDY_SITE_DIR\}/${CADDY_SITE_DIR}}"
@@ -474,7 +475,7 @@ start_reality_watcher() {
         return 0
     fi
 
-    export CADDY_ADMIN_SOCK CADDY_BIN CADDY_HTTP_SOCK CADDY_SITE_DIR LOG_PREFIX
+    export CADDY_ADMIN_SOCK CADDY_BIN CADDY_HTTP_SOCK CADDY_HTTP_PORT CADDY_SITE_DIR LOG_PREFIX
 
     case "${backend}" in
         jq)

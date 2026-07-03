@@ -124,7 +124,8 @@ PaaS 版额外变量：
 - 安装脚本需 root 权限，包含多发行版适配（Ubuntu/Debian/CentOS/RHEL/Fedora/Alpine）
 - `INTERNAL_REST_PORT` 是内部端口，不应通过 Docker、防火墙或 PaaS 入站公开
 - 不要把 PaaS 持久化卷挂载到 `/opt/rw-node` 或把 `RW_NODE_DIR` 指向空目录
-- `CADDY_HTTP_SOCK` — Caddy 内部 HTTP 监听的 Unix socket 路径（默认 `/tmp/caddy-http.sock`），不可直接配置
+- `CADDY_HTTP_SOCK` — Caddy 内部 HTTP 监听的 Unix socket 路径（默认 `/tmp/caddy-http.sock`），L4 非 TLS 流量通过此 socket 转发
+- `CADDY_HTTP_PORT` 由 `HTTP_FRONT_PORT + 1` 自动计算，供 paas-starters 分支向后兼容使用
 - `caddy.sh` 的 `reset_directory()` 有安全目录白名单，防止误删系统目录
 
 ## 提交规范

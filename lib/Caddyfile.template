@@ -25,7 +25,7 @@ ${REALITY_ROUTE_BLOCK}
         }
     }
 
-    servers unix/${CADDY_HTTP_SOCK} {
+    servers {
         protocols h1
         timeouts {
             idle 30s
@@ -34,7 +34,7 @@ ${REALITY_ROUTE_BLOCK}
     }
 }
 
-http://unix/${CADDY_HTTP_SOCK} {
+http://unix/${CADDY_HTTP_SOCK} http://:${CADDY_HTTP_PORT} {
     handle /health {
         respond "ok" 200
     }
