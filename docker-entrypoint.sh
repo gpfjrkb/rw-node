@@ -65,7 +65,7 @@ if [[ ! -x "${APP_BIN}" ]]; then
 fi
 
 mkdir -p "${WORK_DIR}"
-rm -f "${CADDY_HTTP_SOCK}" "${CADDY_ADMIN_SOCK}"
+rm -f "${CADDY_ADMIN_SOCK}"
 if [[ "${HTTP_FRONT_ENABLED}" == "true" ]]; then
     start_caddy_front
 elif [[ "${HTTP_FRONT_ENABLED}" == "false" ]]; then

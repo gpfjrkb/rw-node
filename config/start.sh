@@ -27,7 +27,7 @@ mkdir -p "${WORK_DIR}/bin" "${WORK_DIR}/logs" "${WORK_DIR}/run" \
 
 # ── 清理上一次运行遗留的运行时文件 ──────────────────────────
 rm -f "${WORK_DIR}/run"/*.sock "${WORK_DIR}/run"/*.pid \
-      /tmp/caddy-http.sock /tmp/caddy-admin.sock
+      /tmp/caddy-admin.sock
 
 # ── 加载环境变量 ───────────────────────────────────────────
 load_env_file "${WORK_DIR}/.env"

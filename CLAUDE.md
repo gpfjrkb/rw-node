@@ -34,7 +34,7 @@ core.sh  ← 基础（日志、.env 解析、端口校验、架构检测）
 
 ### Caddyfile 模板系统
 
-`lib/Caddyfile.template` 是三端（Docker entrypoint / 裸机 start.sh / reality-watcher）共用的 Caddy 配置模板，使用 `${PLACEHOLDER}` 占位符，由 `write_caddy_config()` (bash)、`generateCaddyConfig()` (JS/Python) 做字符串替换生成最终 Caddyfile。两个入口脚本（`docker-entrypoint.sh` / `config/start.sh`）通过 `set_default_env()` 统一设置环境变量默认值。
+`lib/Caddyfile.template` 是三端（Docker entrypoint / 裸机 start.sh / reality-watcher）共用的 Caddy 配置模板，使用 `${PLACEHOLDER}` 占位符，由 `write_caddy_config()` (bash)、`generateCaddyConfig()` (JS/Python) 做字符串替换生成最终 Caddyfile。两个入口脚本（`docker-entrypoint.sh` / `config/start.sh`）通过 `set_default_env()` 统一设置环境变量默认值。L4 处理通过 HTTP server 的 `listener_wrappers` 内嵌，而非独立 app，避免 Caddy app 启动顺序竞态。
 
 ### REALITY 动态分流
 
@@ -45,7 +45,7 @@ core.sh  ← 基础（日志、.env 解析、端口校验、架构检测）
 Caddy Layer 4 在 `HTTP_FRONT_PORT` 上做 TLS/非 TLS 分流：
 - TLS ClientHello → TCP 直通到 `NODE_PORT`（不终止 TLS）
 - REALITY SNI 匹配 → TCP 直通到 Xray 端口（watcher 动态注入）
-- 非 TLS → 内部 Unix socket（`CADDY_HTTP_SOCK`）做 HTTP 路径路由：
+- 非 TLS → 直接由 HTTP handler 处理路径路由（通过 `listener_wrappers` 穿透）：
   - `/xh-*` → `XHTTP_UPSTREAM_PORT`（明文 HTTP）
   - `/ws-*` → `WS_UPSTREAM_PORT`（明文 HTTP）
   - `/node/*`、`/vision/*` → `NODE_PORT` HTTPS API（`tls_insecure_skip_verify`）
@@ -118,8 +118,6 @@ PaaS 版额外变量：
 - 安装脚本需 root 权限，包含多发行版适配（Ubuntu/Debian/CentOS/RHEL/Fedora/Alpine）
 - `INTERNAL_REST_PORT` 是内部端口，不应通过 Docker、防火墙或 PaaS 入站公开
 - 不要把 PaaS 持久化卷挂载到 `/opt/rw-node` 或把 `RW_NODE_DIR` 指向空目录
-- `CADDY_HTTP_SOCK` — Caddy 内部 HTTP 监听的 Unix socket 路径（默认 `/tmp/caddy-http.sock`），L4 非 TLS 流量通过此 socket 转发
-- `CADDY_HTTP_PORT` 由 `HTTP_FRONT_PORT + 1` 自动计算，供 paas-starters 分支向后兼容使用
 - `caddy.sh` 的 `reset_directory()` 有安全目录白名单，防止误删系统目录
 
 ## 提交规范

@@ -326,7 +326,7 @@ write_caddy_config() {
 
     local reality_block=""
     if [[ -n "${reality_snis}" && -n "${reality_port}" ]]; then
-        printf -v reality_block '            @reality tls sni %s\n            route @reality {\n                proxy 127.0.0.1:%s\n            }' \
+        printf -v reality_block '                @reality tls sni %s\n                route @reality {\n                    proxy 127.0.0.1:%s\n                }' \
             "${reality_snis}" "${reality_port}"
     fi
 
@@ -336,8 +336,6 @@ write_caddy_config() {
     content="${content//\$\{REALITY_ROUTE_BLOCK\}/${reality_block}}"
     content="${content//\$\{HTTP_FRONT_PORT\}/${HTTP_FRONT_PORT}}"
     content="${content//\$\{NODE_PORT\}/${NODE_PORT}}"
-    content="${content//\$\{CADDY_HTTP_SOCK\}/${CADDY_HTTP_SOCK}}"
-    content="${content//\$\{CADDY_HTTP_PORT\}/${CADDY_HTTP_PORT}}"
     content="${content//\$\{XHTTP_UPSTREAM_PORT\}/${XHTTP_UPSTREAM_PORT}}"
     content="${content//\$\{WS_UPSTREAM_PORT\}/${WS_UPSTREAM_PORT}}"
     content="${content//\$\{CADDY_SITE_DIR\}/${CADDY_SITE_DIR}}"
@@ -460,7 +458,7 @@ start_reality_watcher() {
         return 0
     fi
 
-    export CADDY_ADMIN_SOCK CADDY_BIN CADDY_HTTP_SOCK CADDY_HTTP_PORT CADDY_SITE_DIR LOG_PREFIX
+    export CADDY_ADMIN_SOCK CADDY_BIN CADDY_SITE_DIR LOG_PREFIX
 
     case "${backend}" in
         jq)
@@ -517,7 +515,7 @@ start_caddy_front() {
     rm -f "${validate_output}"
     log "Caddy configuration is valid"
 
-    log "Starting Caddy (layer4 on port ${HTTP_FRONT_PORT}, HTTP on unix socket ${CADDY_HTTP_SOCK})"
+    log "Starting Caddy (HTTP on port ${HTTP_FRONT_PORT} with L4 listener wrapper)"
     env "${caddy_env[@]}" "${CADDY_BIN}" run --config "${config_path}" --adapter caddyfile &
     caddy_pid=$!
 

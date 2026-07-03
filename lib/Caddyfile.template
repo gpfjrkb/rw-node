@@ -12,29 +12,25 @@
         include http.handlers.reverse_proxy
     }
 
-    layer4 {
-        :${HTTP_FRONT_PORT} {
-${REALITY_ROUTE_BLOCK}
-            @tls tls
-            route @tls {
-                proxy 127.0.0.1:${NODE_PORT}
-            }
-            route {
-                proxy unix/${CADDY_HTTP_SOCK}
-            }
-        }
-    }
-
-    servers {
+    servers :${HTTP_FRONT_PORT} {
         protocols h1
         timeouts {
             idle 30s
         }
         max_header_size 32KB
+        listener_wrappers {
+            layer4 {
+${REALITY_ROUTE_BLOCK}
+                @tls tls
+                route @tls {
+                    proxy 127.0.0.1:${NODE_PORT}
+                }
+            }
+        }
     }
 }
 
-http://unix/${CADDY_HTTP_SOCK} http://:${CADDY_HTTP_PORT} {
+http://:${HTTP_FRONT_PORT} {
     handle /health {
         respond "ok" 200
     }
